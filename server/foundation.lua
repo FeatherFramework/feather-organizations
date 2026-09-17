@@ -38,6 +38,7 @@ function Organizations.GetCapabilities()
             lifecycle = 1, health = 1, migrations = 1, types = 1,
             organizations = 1, durableCreation = 1, auditRecords = 1,
             organizationLifecycle = 1, hierarchy = 0,
+            directory = 1, identityUpdates = 1,
             relationships = 0, controllingInterests = 0, affiliations = 0
         } })
 end

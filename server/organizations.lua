@@ -33,7 +33,11 @@ end
 local function Snapshot(row)
     if not row then return Err('organization_not_found', 'Organization not found.') end
     if not Organizations.Uuid(row.organization_id) or not Organizations.Uuid(row.organization_type_id)
-        or not Organizations.Integer(tonumber(row.revision), 1, 9007199254740991) then
+        or not Organizations.Integer(tonumber(row.revision), 1, 9007199254740991)
+        or not Key(row.organization_key,64) or not Key(row.type_key,48)
+        or not Text(row.legal_name,160) or not Text(row.display_name,100)
+        or (row.status~='pending' and row.status~='active' and row.status~='suspended'
+            and row.status~='dissolving' and row.status~='dissolved') then
         return Err('invalid_persistence', 'Persisted organization identity is invalid.')
     end
     return Ok({ organizationId = row.organization_id, organizationTypeId = row.organization_type_id,
@@ -43,6 +47,8 @@ local function Snapshot(row)
 end
 local selectIdentity = [[SELECT o.*,t.`type_key` FROM `feather_organizations` o
     JOIN `feather_organization_types` t ON t.`organization_type_id`=o.`organization_type_id`]]
+OrganizationIdentity.Snapshot = Snapshot
+OrganizationIdentity.SelectSql = selectIdentity
 function OrganizationIdentity.Get(request, resource)
     local allowed = Organizations.CheckRead(resource)
     if not allowed.ok then return allowed end

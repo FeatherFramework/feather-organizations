@@ -47,7 +47,7 @@ Trusted `GetOrganization({ organizationId })` and
 Creation owns `feather_organizations`, `feather_organization_creation_receipts`,
 and `feather_organization_events`. Audit records are durable database facts;
 broker publication/outbox delivery and audit query APIs are not implemented yet.
-Identity edits, pagination, and hierarchy remain deferred.
+Hierarchy remains deferred; bounded listing and name edits are documented below.
 
 First run `OrganizationsCreationContractSmokeTest` (12/12, no entities created).
 Then use `OrganizationsCreationLiveTest org-creation-001` with DevMode enabled.
@@ -120,7 +120,49 @@ rejects foreign mutation and caller injection, preserves the creation-test
 organization, and allows/replays a separate fixture-owned entity's activation.
 See its README for deployment. It is not shipped in default startup/recipe.
 Stop/remove the fixture and disable DevMode before production. These acceptance
-tests remain pending; they do not certify Core policy/provider failure behavior.
+tests passed in development, including export-boundary replay across restart.
+They do not certify Core policy/provider failure behavior.
+
+## Directory and identity edits
+
+Trusted `ListOrganizations({ limit?, cursor?, status?, organizationType? })` returns
+`{ items, nextCursor? }`. Limit defaults to 20 and accepts numeric integers 1–50.
+Rows sort by immutable organization key using database binary collation. Cursor
+is the last returned key, exclusive; keep filters unchanged on subsequent pages.
+No totals, offset dump, or unbounded list is exposed. Pagination is a live view,
+not a frozen snapshot: concurrent inserts/edits may affect later pages.
+
+`UpdateOrganizationIdentity({ organizationId, expectedRevision, requestId,
+reasonCode, legalName, displayName })` requires both names and the same mandatory
+mutator/owner-or-privileged gates as lifecycle changes. Optional Core update
+authorization applies when enabled. UUID, key, type, and status cannot be edited.
+Names follow creation's byte limits and nonblank/control-character validation.
+Pending/active/suspended identities can be renamed; dissolving/dissolved records
+cannot receive fresh edits. Unchanged names return `no_change` without revision
+or audit changes. Stale expected revisions return `revision_conflict`.
+
+Identity changes, payload-bound receipts, and audit records commit together.
+Length-prefixed fingerprints bind all material fields. Exact retry returns its
+original name/revision snapshot, even after later edits; use GetOrganization for
+current state. Request IDs must be distinct across organization operations. A
+failed attempt rolls back receipt reservation. Migration 004 adds the identity
+receipt table without changing applied foundation/creation/lifecycle migrations.
+
+Acceptance commands (pending runtime validation):
+
+- `OrganizationsDirectoryContractSmokeTest`: 13/13 read-only checks.
+- `OrganizationsIdentityContractSmokeTest`: 12/12, no edits.
+- `OrganizationsIdentityLiveTest org-identity-001`: a separate fixed-key entity
+  renamed/restored to revision 3, replay/mismatch/stale/no-change checks, blocked
+  edits to the dissolved lifecycle-test entity, and three audit events.
+- Repeat the live test with the same ID after restart, never a new request.
+- Optional fixture `OrganizationsIdentityBoundaryTest org-identity-boundary-001`
+  verifies real exported bounded reads, foreign rename denial, and fixture-owned
+  edit/replay (requires earlier ownership fixture acceptance).
+
+After manifest additions run refresh then restart Organizations; start the
+optional fixture again only when testing its cross-resource calls. No gameplay
+UI or recipe entry is added by this slice.
 
 ## Installation and first acceptance
 

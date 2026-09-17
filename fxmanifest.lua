@@ -16,6 +16,8 @@ server_scripts {
     'server/types.lua',
     'server/organizations.lua',
     'server/lifecycle.lua',
+    'server/directory.lua',
+    'server/directory_tests.lua',
     'server/lifecycle_tests.lua',
     'server/concurrency_tests.lua',
     'server/tests.lua',

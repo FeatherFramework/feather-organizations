@@ -51,6 +51,14 @@ local definitions = {
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (`source_resource`,`request_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
+    } },
+    { id = '004_organization_identity_updates', statements = {
+        [[CREATE TABLE IF NOT EXISTS `feather_organization_identity_receipts` (
+            `source_resource` VARCHAR(100) NOT NULL, `request_id` VARCHAR(128) NOT NULL,
+            `request_fingerprint` LONGTEXT NOT NULL, `result_json` LONGTEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`source_resource`,`request_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
     } }
 }
 local function Hash(value)
