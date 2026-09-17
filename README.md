@@ -148,7 +148,8 @@ current state. Request IDs must be distinct across organization operations. A
 failed attempt rolls back receipt reservation. Migration 004 adds the identity
 receipt table without changing applied foundation/creation/lifecycle migrations.
 
-Acceptance commands (pending runtime validation):
+Recorded development acceptance commands (all passed, including exact restart
+replay and the identity export-boundary fixture):
 
 - `OrganizationsDirectoryContractSmokeTest`: 13/13 read-only checks.
 - `OrganizationsIdentityContractSmokeTest`: 12/12, no edits.
@@ -163,6 +164,21 @@ Acceptance commands (pending runtime validation):
 After manifest additions run refresh then restart Organizations; start the
 optional fixture again only when testing its cross-resource calls. No gameplay
 UI or recipe entry is added by this slice.
+
+### Shared identity/lifecycle revision contention
+
+Dev-only `OrganizationsIdentityLifecycleConcurrencyTest org-identity-race-001`
+creates one separate fixed-key entity and races a rename against begin-dissolution
+at revision 1. Either operation may win. Expect one success, one revision conflict,
+revision 2, two audit events including creation, exactly one receipt across both
+mutation tables, consistent winner-only names/status, and exact winner replay.
+No previous acceptance entity, money, or item changes. This entity stays pending
+and renamed, or dissolving with original names, depending on the winner.
+
+The completion counter has a 30-second watchdog; timeout does not cancel DB work.
+Keep original IDs for inspection/retry. Restart replay validates persisted winner
+state, not a second fresh race. This cross-operation test is awaiting runtime
+acceptance; policy-provider failures and broad pagination contention remain gates.
 
 ## Installation and first acceptance
 
@@ -191,7 +207,7 @@ invoking resource in `Config.Access.trustedReaders`. They return copies and are
 readiness-gated. No client may supply a trusted resource identity.
 
 Types are initial classifications, not capabilities or active organization
-entities. Runtime type registration/providers and durable audit facts remain
+entities. Runtime type registration/providers and broker audit publication remain
 future work. Restarting Core can stop this consumer; start it again after Core
 is ready. Cross-resource methods must be checked with IsCallable rather than
 Lua function-only checks when provider tables are introduced.
