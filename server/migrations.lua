@@ -59,6 +59,25 @@ local definitions = {
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (`source_resource`,`request_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
+    } },
+    { id = '005_organization_hierarchy', statements = {
+        [[CREATE TABLE IF NOT EXISTS `feather_organization_hierarchy_guard` (
+            `id` TINYINT NOT NULL, PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB]],
+        [[INSERT IGNORE INTO `feather_organization_hierarchy_guard` (`id`) VALUES (1)]],
+        [[CREATE TABLE IF NOT EXISTS `feather_organization_parents` (
+            `organization_id` CHAR(36) NOT NULL, `parent_organization_id` CHAR(36) NOT NULL,
+            PRIMARY KEY (`organization_id`), KEY `idx_organization_parent` (`parent_organization_id`),
+            CONSTRAINT `fk_organization_child` FOREIGN KEY (`organization_id`) REFERENCES `feather_organizations` (`organization_id`),
+            CONSTRAINT `fk_organization_parent` FOREIGN KEY (`parent_organization_id`) REFERENCES `feather_organizations` (`organization_id`),
+            CONSTRAINT `chk_organization_parent_self` CHECK (`organization_id` <> `parent_organization_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]],
+        [[CREATE TABLE IF NOT EXISTS `feather_organization_hierarchy_receipts` (
+            `source_resource` VARCHAR(100) NOT NULL, `request_id` VARCHAR(128) NOT NULL,
+            `request_fingerprint` LONGTEXT NOT NULL, `result_json` LONGTEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`source_resource`,`request_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
     } }
 }
 local function Hash(value)

@@ -9,7 +9,7 @@ Contract 1 flat results, bounded readiness, defensive trusted type reads, and
 checksummed resource-owned migrations. Initial types: business, government,
 government_agency. Persisted UUIDs survive restart; display labels do not define
 authority. Durable organization creation/read and lifecycle transitions are now
-implemented. Hierarchy, interests, membership, client RPC, and gameplay UI remain
+implemented, together with single-parent hierarchy. Interests, membership, client RPC, and gameplay UI remain
 unavailable and are reported as zero.
 
 Only Organizations writes `feather_organization_types` and
@@ -47,7 +47,7 @@ Trusted `GetOrganization({ organizationId })` and
 Creation owns `feather_organizations`, `feather_organization_creation_receipts`,
 and `feather_organization_events`. Audit records are durable database facts;
 broker publication/outbox delivery and audit query APIs are not implemented yet.
-Hierarchy remains deferred; bounded listing and name edits are documented below.
+Bounded listing, name edits, and single-parent hierarchy are documented below.
 
 First run `OrganizationsCreationContractSmokeTest` (12/12, no entities created).
 Then use `OrganizationsCreationLiveTest org-creation-001` with DevMode enabled.
@@ -177,8 +177,68 @@ and renamed, or dissolving with original names, depending on the winner.
 
 The completion counter has a 30-second watchdog; timeout does not cancel DB work.
 Keep original IDs for inspection/retry. Restart replay validates persisted winner
-state, not a second fresh race. This cross-operation test is awaiting runtime
-acceptance; policy-provider failures and broad pagination contention remain gates.
+state, not a second fresh race. This cross-operation test and restart replay passed
+with lifecycle winning and the edit rejected as stale. Policy-provider failures
+and broad pagination contention remain gates.
+
+## Single-parent hierarchy
+
+`SetParentOrganization({ organizationId, parentOrganizationId, expectedRevision,
+requestId, reasonCode })` and `RemoveParentOrganization({ organizationId,
+expectedRevision, requestId, reasonCode })` use the same mandatory mutator/reader
+trust as edits. Ordinary callers must own the child and proposed parent; explicit
+privileged mutators may cross owner boundaries. Optional Core action is
+`organizations.relationship.manage`. This is structural control, not player
+membership or an implicit permission to use the parent's accounts/facilities.
+
+Each child has at most one parent. Reject self-parent, cycles, unchanged links,
+stale child revision, and fresh changes involving dissolving/dissolved child or
+proposed parent. Existing links are preserved if lifecycle later changes; status
+does not cascade to children. Removal changes only the link, not identity.
+Only the child revision advances; parent revision/status is untouched.
+
+All graph writers first lock a persisted guard row, then validate within their
+transaction. Parent changes, child revision, durable receipt, and audit event
+commit together. The graph is bounded to 4096 links and 32 ancestry links;
+validation includes descendants so moving a subtree cannot exceed the depth cap.
+These are deliberately small-foundation limits, not unbounded graph support.
+Snapshot reads include `parentOrganizationId` when linked. Exact change replay
+returns the original receipt and does not undo a later removal/reparent.
+
+Trusted `ListOrganizationChildren({ organizationId, limit?, cursor? })` uses the
+same 1–50 stable-key pagination as the directory and requires an existing parent.
+`ListOrganizations` also accepts `parentOrganizationId` as a filter. Neither
+query recursively dumps the tree or inherits authorization from a relationship.
+Migration 005 adds parent links, serialization guard, and hierarchy receipts;
+applied migrations remain unchanged. No typed relationships are implemented.
+
+Recorded hierarchy acceptance:
+
+- `OrganizationsHierarchyContractSmokeTest`: expect 13/13, no link changes.
+- `OrganizationsHierarchyLiveTest org-hierarchy-001`: creates three separate
+  pending entities, links a chain, rejects cycle/stale/mismatched requests,
+  removes one link, and replays the old set without restoring it. Six audit
+  events and rejected-receipt rollback are required; restart uses the same ID.
+- Optional fixture `OrganizationsHierarchyBoundaryTest org-hierarchy-boundary-001`
+  denies foreign child/parent linkage and permits owned set/replay/children reads.
+  It requires prior ownership/identity fixture acceptance and adds one parent
+  entity; no money, employment, or item data changes.
+
+Contract passed 13/13. Live hierarchy and exact restart replay passed with six
+events, cycle/stale/mismatch rejection, and the removed link staying absent.
+Actual export-boundary tests and restart passed for foreign child/parent denial,
+owned linking/replay, bounded children, and unchanged foreign target.
+
+Dev-only `OrganizationsHierarchyConcurrencyTest org-hierarchy-race-001` is the
+remaining pending gate. It creates two separate entities and concurrently submits
+A → B and B → A. Either contender may win; require one commit, one hierarchy-cycle
+rejection, one link/receipt, three events including both creations, unchanged
+parent revision, and exact winner replay. A bounded 30-second watchdog does not
+cancel DB work. Retain original IDs on timeout or restart; repeating the test
+replays the persisted winner rather than running another fresh race. No money,
+items, or earlier acceptance entities change.
+Run refresh after manifest additions, then restart Organizations. Stop the
+optional fixture after testing and disable DevMode before production.
 
 ## Installation and first acceptance
 

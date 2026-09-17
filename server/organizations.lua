@@ -36,6 +36,7 @@ local function Snapshot(row)
         or not Organizations.Integer(tonumber(row.revision), 1, 9007199254740991)
         or not Key(row.organization_key,64) or not Key(row.type_key,48)
         or not Text(row.legal_name,160) or not Text(row.display_name,100)
+        or (row.parent_organization_id~=nil and not Organizations.Uuid(row.parent_organization_id))
         or (row.status~='pending' and row.status~='active' and row.status~='suspended'
             and row.status~='dissolving' and row.status~='dissolved') then
         return Err('invalid_persistence', 'Persisted organization identity is invalid.')
@@ -43,10 +44,11 @@ local function Snapshot(row)
     return Ok({ organizationId = row.organization_id, organizationTypeId = row.organization_type_id,
         organizationType = row.type_key, organizationKey = row.organization_key,
         legalName = row.legal_name, displayName = row.display_name,
-        status = row.status, revision = tonumber(row.revision) })
+        status = row.status, revision = tonumber(row.revision), parentOrganizationId = row.parent_organization_id })
 end
-local selectIdentity = [[SELECT o.*,t.`type_key` FROM `feather_organizations` o
-    JOIN `feather_organization_types` t ON t.`organization_type_id`=o.`organization_type_id`]]
+local selectIdentity = [[SELECT o.*,t.`type_key`,p.`parent_organization_id` FROM `feather_organizations` o
+    JOIN `feather_organization_types` t ON t.`organization_type_id`=o.`organization_type_id`
+    LEFT JOIN `feather_organization_parents` p ON p.`organization_id`=o.`organization_id`]]
 OrganizationIdentity.Snapshot = Snapshot
 OrganizationIdentity.SelectSql = selectIdentity
 function OrganizationIdentity.Get(request, resource)

@@ -18,6 +18,8 @@ CreateThread(function()
         Organizations.SetState('starting', 'loading_types')
         local loaded = OrganizationTypes.Load()
         if not loaded.ok then return loaded end
+        local hierarchy = OrganizationHierarchy.CheckStartup()
+        if not hierarchy.ok then return hierarchy end
         Organizations.SetState('ready', 'ready')
         print(('[feather-organizations] event=startup.ready migrationsApplied=%d types=%d'):format(migrated.value.applied, loaded.value.types))
         return Organizations.Ok(true)
@@ -70,7 +72,7 @@ RegisterCommand('OrganizationsFoundationSmokeTest', function(source)
             { 'invalid rejected', not invalid.ok and invalid.code == 'invalid_input' },
             { 'await ready', Organizations.AwaitReady(0).ok },
             { 'persisted identity', business.ok and persisted and persisted.organization_type_id == business.value.organizationTypeId },
-            { 'migration ledger', tonumber(migrations) == 4 }
+            { 'migration ledger', tonumber(migrations) == 5 }
         }
         local passed = 0
         for _, test in ipairs(tests) do

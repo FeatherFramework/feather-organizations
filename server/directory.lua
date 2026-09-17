@@ -10,7 +10,7 @@ local function Name(value, maximum)
 end
 function OrganizationDirectory.ValidateList(request)
     if type(request)~='table' then return Err('invalid_input','Directory request required.') end
-    local fields={limit=true,cursor=true,status=true,organizationType=true}
+    local fields={limit=true,cursor=true,status=true,organizationType=true,parentOrganizationId=true}
     for key in pairs(request) do
         if not fields[key] then return Err('invalid_input','Unexpected directory field.') end
     end
@@ -22,7 +22,11 @@ function OrganizationDirectory.ValidateList(request)
         or (request.organizationType~=nil and not Key(request.organizationType,48)) then
         return Err('invalid_input','Integer limit 1–50 and valid cursor/type/status required.')
     end
-    return Ok({limit=limit,cursor=request.cursor,status=request.status,organizationType=request.organizationType})
+    if request.parentOrganizationId~=nil and not Organizations.Uuid(request.parentOrganizationId) then
+        return Err('invalid_input','Valid parent organization UUID required.')
+    end
+    return Ok({limit=limit,cursor=request.cursor,status=request.status,organizationType=request.organizationType,
+        parentOrganizationId=request.parentOrganizationId and request.parentOrganizationId:lower()})
 end
 function OrganizationDirectory.List(request,resource)
     local allowed=Organizations.CheckRead(resource)
@@ -34,6 +38,7 @@ function OrganizationDirectory.List(request,resource)
     local params={options.cursor or ''}
     if options.status then sql=sql .. ' AND o.`status`=?';params[#params+1]=options.status end
     if options.organizationType then sql=sql .. ' AND t.`type_key`=?';params[#params+1]=options.organizationType end
+    if options.parentOrganizationId then sql=sql .. ' AND p.`parent_organization_id`=?';params[#params+1]=options.parentOrganizationId end
     sql=sql .. ' ORDER BY o.`organization_key` ASC LIMIT ?';params[#params+1]=options.limit+1
     local rows=MySQL.query.await(sql,params) or {}
     local items={}
