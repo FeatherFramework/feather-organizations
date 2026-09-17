@@ -40,7 +40,7 @@ function Organizations.GetCapabilities()
             organizationLifecycle = 1, hierarchy = 1,
             directory = 1, identityUpdates = 1,
             outbox = 1, eventPublication = 1, auditHistory = 1, interestTypes = 1,
-            relationships = 0, controllingInterests = 1, affiliations = 0
+            relationships = 0, controllingInterests = 1, interestReads = 1, affiliations = 0
         } })
 end
 function Organizations.AwaitReady(timeoutMs)

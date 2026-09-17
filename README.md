@@ -314,7 +314,30 @@ Character validation uses its provider, not a cross-domain SQL transaction;
 future deletion reconciliation remains a separate integration gate.
 The new server-only events `organizations.organization.interest_granted.v1` and
 `organizations.organization.interest_revoked.v1` include interest UUID/type/status,
-but omit holder UUIDs and private names. No public interest listing is added yet.
+but omit holder UUIDs and private names. No public interest listing is added.
+
+`ListOrganizationInterests({organizationId, limit?, cursor?, status?})` is a private
+trusted-auditor read (also requires trusted-reader readiness). Auditors can inspect
+only organizations created by their resource unless explicitly privileged.
+Unlike broker events, this authorized projection includes holder UUID/type, plus
+interest UUID/type/status and last-change organization revision; it never includes
+names, profiles or account IDs. The default limit is 20, maximum 50 numeric integer.
+Pages sort by stable interest UUID ascending. Follow `nextCursor` with the same
+organization and optional active/revoked filter; unrelated/filter-mismatched cursors
+are rejected. This is a live view, not a snapshot, and filter membership can change
+between pages. It does not verify holders still exist on every historical read.
+No player route, all-organization enumeration or holder-based search is exposed.
+Run `OrganizationsInterestReadContractSmokeTest` for 12 read-only checks; real
+pagination, privacy and cross-resource read acceptance passed as recorded below.
+
+`OrganizationsInterestReadLiveTest <stable requestId> <character UUID>` creates
+one fixed-key test organization, grants character owner/founder and organization
+controller interests, then revokes the character owner. It uses the active
+`org_event_test_child` organization as controller. Expect revision 5, three
+interests (two active/one revoked), five audit/outbox records and four interest
+receipts. Live and restart acceptance passed with unchanged IDs/counts.
+It checks full and filtered pagination, cursor boundaries, projection
+privacy and isolation. Repeat the same request ID and character UUID after restart.
 
 Development-only `OrganizationsInterestLiveTest <stable requestId> <character UUID>`
 creates one fixed-key organization and grants, revokes, then regrants one owner
@@ -337,6 +360,28 @@ and after restart. Organization-holder mutations, bounded private interest reads
 mixed-operation races and production authorization tests remain pending.
 
 ## Event publication
+
+Development-only `OrganizationsInterestLifecycleTest <stable requestId> <character UUID>`
+creates a separate fixed-key organization, grants one owner, starts dissolution,
+rejects new grants, revokes the existing interest and finishes dissolution.
+It checks terminal mutation rejection, preserved original receipts, readable
+revoked interests/history, revision 5 and five audit/outbox records. Repeat the
+exact request ID and holder UUID after restart. This is explicit cleanup, not
+automatic revocation of every interest when an organization dissolves.
+Live and restart cleanup acceptance passed at dissolved revision 5 with unchanged
+audit/outbox counts and original receipt/history reads intact.
+
+`OrganizationsInterestLifecycleConcurrencyTest <stable requestId> <character UUID>`
+competes an owner grant with begin-dissolution at revision 1 on a separate fixed
+test organization. Either winner is valid: require one commit/one stale rejection,
+revision 2, winner-consistent lifecycle/interest state, one mutation receipt and
+two audit/outbox records. Repeat the exact request ID/holder UUID after restart.
+Live and restart mixed-race acceptance passed with lifecycle winning, revision 2,
+dissolving state, zero interests, one receipt and unchanged audit/outbox counts.
+Private read contract passed 12/12; multi-page/filtered read and separate fixture
+ownership checks passed before and after restart. Remaining gates include
+organization-holder lifecycle changes, production policy decisions and consumer
+integration; no automatic interest cleanup or implicit permission grants exist.
 
 Every new committed creation, lifecycle, identity, or parent change writes an
 audit record and outbox record in the same database transaction. Request replays

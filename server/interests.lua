@@ -217,7 +217,231 @@ end
 exports('GrantOrganizationInterest',function(request) return InterestBoundary(request,'grant') end)
 exports('RevokeOrganizationInterest',function(request) return InterestBoundary(request,'revoke') end)
 
+function OrganizationInterests.ValidateList(request)
+    if type(request)~='table' or not Organizations.Uuid(request.organizationId) then return Err('invalid_input','Organization UUID required.') end
+    for field in pairs(request) do
+        if field~='organizationId' and field~='limit' and field~='cursor' and field~='status' then return Err('invalid_input','Unexpected interest list field.') end
+    end
+    local limit=request.limit
+    if limit==nil then limit=20 end
+    if not Organizations.Integer(limit,1,50) or (request.cursor~=nil and not Organizations.Uuid(request.cursor))
+        or (request.status~=nil and request.status~='active' and request.status~='revoked') then
+        return Err('invalid_input','Integer limit 1–50, interest UUID cursor and active/revoked status required.')
+    end
+    return Ok({organizationId=request.organizationId:lower(),limit=limit,
+        cursor=request.cursor and request.cursor:lower(),status=request.status})
+end
+function OrganizationInterests.List(request,resource)
+    if Config.Access.trustedAuditors[resource or '']~=true then return Err('authorization_denied','Caller is not a trusted interest reader.') end
+    local allowed=Organizations.CheckRead(resource)
+    if not allowed.ok then return allowed end
+    local valid=OrganizationInterests.ValidateList(request)
+    if not valid.ok then return valid end
+    local options=valid.value
+    local owner=MySQL.single.await('SELECT `created_by_resource` FROM `feather_organizations` WHERE `organization_id`=?',{options.organizationId})
+    if not owner then return Err('organization_not_found','Organization not found.') end
+    if owner.created_by_resource~=resource and Config.Access.privilegedAuditors[resource]~=true then
+        return Err('authorization_denied','Caller cannot inspect these controlling interests.')
+    end
+    local sql=[[SELECT `interest_id`,`interest_type`,`holder_type`,`holder_id`,`status`,`revision`
+        FROM `feather_organization_interests` WHERE `organization_id`=?]]
+    local params={options.organizationId}
+    if options.cursor then
+        local cursor=MySQL.single.await('SELECT `status` FROM `feather_organization_interests` WHERE `interest_id`=? AND `organization_id`=?',
+            {options.cursor,options.organizationId})
+        if not cursor or (options.status and cursor.status~=options.status) then return Err('invalid_cursor','Cursor does not belong to this organization/filter.') end
+        sql=sql..' AND `interest_id`>?';params[#params+1]=options.cursor
+    end
+    if options.status then sql=sql..' AND `status`=?';params[#params+1]=options.status end
+    sql=sql..' ORDER BY `interest_id` LIMIT ?';params[#params+1]=options.limit+1
+    local rows=MySQL.query.await(sql,params) or {}
+    local items={}
+    for index=1,math.min(#rows,options.limit) do
+        local row=rows[index]
+        if not Organizations.Uuid(row.interest_id) or not Organizations.Uuid(row.holder_id)
+            or not Organizations.Integer(tonumber(row.revision),1,9007199254740991)
+            or (row.status~='active' and row.status~='revoked') then return Err('invalid_persistence','Invalid persisted controlling interest.') end
+        local tuple={organizationId=options.organizationId,expectedRevision=1,requestId='list-validation',reasonCode='list.validation',
+            interestType=row.interest_type,holderType=row.holder_type,holderId=row.holder_id}
+        if not OrganizationInterests.ValidateGrant(tuple).ok then return Err('invalid_persistence','Invalid persisted interest holder/type.') end
+        items[#items+1]={interestId=row.interest_id,organizationId=options.organizationId,interestType=row.interest_type,
+            holderType=row.holder_type,holderId=row.holder_id,status=row.status,revision=tonumber(row.revision)}
+    end
+    return Ok({items=items,nextCursor=#rows>options.limit and items[#items].interestId or nil})
+end
+exports('ListOrganizationInterests',function(request)
+    local called,result=xpcall(function() return OrganizationInterests.List(request,GetInvokingResource()) end,debug.traceback)
+    if not called then return Err('internal_error','Interest list failed.') end
+    return result
+end)
+
+RegisterCommand('OrganizationsInterestReadContractSmokeTest',function(source)
+    if source~=0 then return end
+    local called,reason=xpcall(function()
+        assert(Organizations.AwaitReady(0).ok,'Service not ready')
+        local tests={}
+        local function Check(label,good) tests[#tests+1]={label,good==true} end
+        local id='00000000-0000-0000-0000-000000000001'
+        local default=OrganizationInterests.ValidateList({organizationId=id})
+        Check('bounded default',default.ok and default.value.limit==20)
+        Check('maximum accepted',OrganizationInterests.ValidateList({organizationId=id,limit=50}).ok)
+        for _,limit in ipairs({0,1.5,51,'2'}) do
+            Check('limit rejected '..tostring(limit),not OrganizationInterests.ValidateList({organizationId=id,limit=limit}).ok)
+        end
+        Check('bad cursor rejected',not OrganizationInterests.ValidateList({organizationId=id,cursor='bad'}).ok)
+        Check('bad status rejected',not OrganizationInterests.ValidateList({organizationId=id,status='pending'}).ok)
+        Check('identity injection rejected',not OrganizationInterests.ValidateList({organizationId=id,sourceResource=GetCurrentResourceName()}).ok)
+        Check('holder enumeration rejected',not OrganizationInterests.ValidateList({organizationId=id,holderId=id}).ok)
+        local denied=OrganizationInterests.List({organizationId=id},'untrusted-smoke-caller')
+        Check('untrusted read rejected',not denied.ok and denied.code=='authorization_denied')
+        Check('private reads capability',Organizations.GetCapabilities().value.features.interestReads==1)
+        local passed=0
+        for _,test in ipairs(tests) do
+            if test[2] then passed=passed+1 end
+            print(('[OrganizationsInterestReadContractSmokeTest] %-29s %s'):format(test[1],test[2] and 'PASS' or 'FAIL'))
+        end
+        print(('[OrganizationsInterestReadContractSmokeTest] done %d/%d passed (read-only)'):format(passed,#tests))
+    end,debug.traceback)
+    if not called then print('[OrganizationsInterestReadContractSmokeTest] FAIL '..tostring(reason)) end
+end,true)
+
 local interestLiveRunning=false
+RegisterCommand('OrganizationsInterestLifecycleTest',function(source,args)
+    if source~=0 or not Config.DevMode then return end
+    if interestLiveRunning then print('[OrganizationsInterestLifecycleTest] FAIL already running');return end
+    interestLiveRunning=true
+    local called,reason=xpcall(function()
+        assert(#args==2 and #args[1]<=100 and Organizations.Uuid(args[2]),'Use <stable requestId> <character UUID>')
+        assert(Organizations.AwaitReady(0).ok,'Service not ready')
+        local owner=GetCurrentResourceName()
+        local function Require(result) assert(result.ok,tostring(result.code)..': '..tostring(result.message));return result.value end
+        local created=Require(OrganizationIdentity.Create({requestId=args[1]..':create',organizationType='business',
+            organizationKey='org_interest_lifecycle_test',legalName='Organization Interest Lifecycle Test Company',
+            displayName='Interest Lifecycle Test',reasonCode='development.interest_lifecycle'},owner))
+        local id=created.organizationId
+        local grant={organizationId=id,expectedRevision=1,requestId=args[1]..':grant',reasonCode='development.interest_lifecycle',
+            interestType='owner',holderType='character',holderId=args[2]:lower()}
+        local granted=Require(OrganizationInterests.Change(grant,owner,'grant'))
+        local function Transition(revision,status)
+            return Require(OrganizationLifecycle.Change({organizationId=id,expectedRevision=revision,status=status,
+                requestId=args[1]..':'..status,reasonCode='development.interest_lifecycle'},owner))
+        end
+        Transition(2,'dissolving')
+        local before=Require(OrganizationIdentity.Get({organizationId=id},owner))
+        local function Blocked(revision,suffix,operation)
+            local request=Organizations.Copy(grant);request.expectedRevision=revision;request.requestId=args[1]..':'..suffix
+            local denied=OrganizationInterests.Change(request,owner,operation)
+            assert(not denied.ok and denied.code=='organization_inactive','Lifecycle '..operation..' not blocked')
+        end
+        if before.status=='dissolving' then Blocked(3,'blocked_grant','grant')
+        else assert(before.status=='dissolved' and before.revision==5,'Unexpected replay lifecycle') end
+        local revoke=Organizations.Copy(grant);revoke.expectedRevision=3;revoke.requestId=args[1]..':revoke'
+        local revoked=Require(OrganizationInterests.Change(revoke,owner,'revoke'))
+        assert(revoked.status=='revoked' and revoked.interestId==granted.interestId,'Cleanup identity inconsistent')
+        Transition(4,'dissolved')
+        Blocked(5,'terminal_grant','grant');Blocked(5,'terminal_revoke','revoke')
+        local oldGrant=Require(OrganizationInterests.Change(grant,owner,'grant'))
+        local oldRevoke=Require(OrganizationInterests.Change(revoke,owner,'revoke'))
+        assert(oldGrant.replayed and oldGrant.status=='active' and oldGrant.revision==2
+            and oldRevoke.replayed and oldRevoke.status=='revoked' and oldRevoke.revision==4,'Original receipts changed')
+        local current=Require(OrganizationIdentity.Get({organizationId=id},owner))
+        local revokedPage=Require(OrganizationInterests.List({organizationId=id,status='revoked',limit=1},owner))
+        local active=Require(OrganizationInterests.List({organizationId=id,status='active'},owner))
+        local history=Require(OrganizationEvents.History({organizationId=id},owner))
+        assert(current.status=='dissolved' and current.revision==5 and #revokedPage.items==1 and not revokedPage.nextCursor
+            and revokedPage.items[1].interestId==granted.interestId and revokedPage.items[1].revision==4
+            and #active.items==0 and #history.items==5,'Terminal state/read inconsistent')
+        local counts=MySQL.single.await([[SELECT
+            (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?) AS outbox,
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?)) AS receipts,
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?)) AS rejected]],
+            {id,owner,grant.requestId,revoke.requestId,owner,args[1]..':blocked_grant',args[1]..':terminal_grant',args[1]..':terminal_revoke'})
+        assert(tonumber(counts.outbox)==5 and tonumber(counts.receipts)==2 and tonumber(counts.rejected)==0,'Atomic counts invalid')
+        print(('[OrganizationsInterestLifecycleTest] PASS id=%s state=dissolved revision=5 grantBlocked=true cleanupAllowed=true terminalBlocked=true originalReceipts=true historyReadable=true events=5 outbox=5 rolledBack=true firstReplayed=%s'):format(id,tostring(granted.replayed)))
+    end,debug.traceback)
+    interestLiveRunning=false
+    if not called then print('[OrganizationsInterestLifecycleTest] FAIL '..tostring(reason)) end
+end,true)
+
+RegisterCommand('OrganizationsInterestReadLiveTest',function(source,args)
+    if source~=0 or not Config.DevMode then return end
+    if interestLiveRunning then print('[OrganizationsInterestReadLiveTest] FAIL test already running');return end
+    interestLiveRunning=true
+    local called,reason=xpcall(function()
+        assert(#args==2 and #args[1]<=100 and Organizations.Uuid(args[2]),'Use <stable requestId> <character UUID>')
+        assert(Organizations.AwaitReady(0).ok,'Service not ready')
+        local owner=GetCurrentResourceName()
+        local function Require(result)
+            assert(result.ok,tostring(result.code)..': '..tostring(result.message));return result.value
+        end
+        local holder=Require(OrganizationIdentity.Find({organizationKey='org_event_test_child'},owner))
+        local created=Require(OrganizationIdentity.Create({requestId=args[1]..':create',organizationType='business',
+            organizationKey='org_interest_read_test',legalName='Organization Interest Read Test Company',displayName='Interest Read Test',
+            reasonCode='development.interest_read'},owner))
+        local id=created.organizationId
+        local requests={
+            {interestType='owner',holderType='character',holderId=args[2]:lower()},
+            {interestType='founder',holderType='character',holderId=args[2]:lower()},
+            {interestType='controlling_organization',holderType='organization',holderId=holder.organizationId}
+        }
+        local granted={}
+        for index,request in ipairs(requests) do
+            request.organizationId=id;request.expectedRevision=index;request.requestId=args[1]..':grant'..index
+            request.reasonCode='development.interest_read'
+            granted[index]=Require(OrganizationInterests.Change(request,owner,'grant'))
+        end
+        local revoke=Organizations.Copy(requests[1]);revoke.expectedRevision=4;revoke.requestId=args[1]..':revoke'
+        local revoked=Require(OrganizationInterests.Change(revoke,owner,'revoke'))
+        assert(revoked.interestId==granted[1].interestId,'Revocation identity changed')
+        local cursor,seen,items=nil,{},{}
+        for page=1,3 do
+            local result=Require(OrganizationInterests.List({organizationId=id,limit=1,cursor=cursor},owner))
+            assert(#result.items==1,'Expected one item per page')
+            local item=result.items[1]
+            assert(not seen[item.interestId] and (not cursor or item.interestId>cursor),'Pagination duplicated/reordered an item')
+            seen[item.interestId]=true;items[item.interestId]=Organizations.Copy(item)
+            for field in pairs(item) do
+                assert(field=='interestId' or field=='organizationId' or field=='interestType' or field=='holderType'
+                    or field=='holderId' or field=='status' or field=='revision','Unexpected private field')
+            end
+            item.holderId='tampered'
+            cursor=result.nextCursor
+            assert((page<3 and cursor~=nil) or (page==3 and cursor==nil),'Pagination boundary invalid')
+        end
+        for index,grant in ipairs(granted) do
+            local item=items[grant.interestId]
+            assert(item and item.organizationId==id and item.holderId==requests[index].holderId
+                and item.holderType==requests[index].holderType and item.interestType==requests[index].interestType
+                and item.status==(index==1 and 'revoked' or 'active')
+                and item.revision==(index==1 and 5 or index+1),'Persisted interest projection inconsistent')
+        end
+        local active=Require(OrganizationInterests.List({organizationId=id,status='active',limit=1},owner))
+        assert(#active.items==1 and active.nextCursor,'Active first page invalid')
+        local nextActive=Require(OrganizationInterests.List({organizationId=id,status='active',limit=1,cursor=active.nextCursor},owner))
+        assert(#nextActive.items==1 and not nextActive.nextCursor and nextActive.items[1].interestId~=active.items[1].interestId,'Active second page invalid')
+        local revokedPage=Require(OrganizationInterests.List({organizationId=id,status='revoked',limit=1},owner))
+        assert(#revokedPage.items==1 and revokedPage.items[1].interestId==revoked.interestId and not revokedPage.nextCursor,'Revoked filter invalid')
+        local filterMismatch=OrganizationInterests.List({organizationId=id,status='active',cursor=revoked.interestId},owner)
+        assert(not filterMismatch.ok and filterMismatch.code=='invalid_cursor','Filter-mismatched cursor accepted')
+        local foreign=OrganizationInterests.List({organizationId=holder.organizationId,cursor=revoked.interestId},owner)
+        assert(not foreign.ok and foreign.code=='invalid_cursor','Foreign organization cursor accepted')
+        local reread=Require(OrganizationInterests.List({organizationId=id,limit=50},owner))
+        assert(#reread.items==3 and not reread.nextCursor,'Full page invalid')
+        for _,item in ipairs(reread.items) do assert(item.holderId==items[item.interestId].holderId,'Caller mutation changed stored data') end
+        local current=Require(OrganizationIdentity.Get({organizationId=id},owner))
+        assert(current.revision==5 and current.status=='pending','Shared organization revision inconsistent')
+        local counts=MySQL.single.await([[SELECT
+            (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id=?) AS events,
+            (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?) AS outbox,
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?,?)) AS receipts]],
+            {id,id,owner,requests[1].requestId,requests[2].requestId,requests[3].requestId,revoke.requestId})
+        assert(tonumber(counts.events)==5 and tonumber(counts.outbox)==5 and tonumber(counts.receipts)==4,'Replay record counts changed')
+        print(('[OrganizationsInterestReadLiveTest] PASS id=%s revision=5 interests=3 active=2 revoked=1 paginated=true isolated=true cursorBoundaries=true organizationHolder=true events=5 outbox=5 firstReplayed=%s'):format(id,tostring(granted[1].replayed)))
+    end,debug.traceback)
+    interestLiveRunning=false
+    if not called then print('[OrganizationsInterestReadLiveTest] FAIL '..tostring(reason)) end
+end,true)
+
 RegisterCommand('OrganizationsInterestLiveTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLiveRunning then print('[OrganizationsInterestLiveTest] FAIL test already running');return end
