@@ -94,10 +94,8 @@ function OrganizationLifecycle.Change(request, resource)
             end
             query([[UPDATE `feather_organizations` SET `status`=?,`revision`=`revision`+1
                 WHERE `organization_id`=? AND `revision`=?]], { request.status, request.organizationId, revision })
-            query([[INSERT INTO `feather_organization_events`
-                (`event_id`,`organization_id`,`event_type`,`source_resource`,`request_id`,`reason_code`,`revision`)
-                VALUES (UUID(),?,'organization.status_changed',?,?,?,?)]],
-                { request.organizationId, resource, request.requestId, request.reasonCode, revision + 1 })
+            OrganizationEvents.Record(query,request.organizationId,'organization.status_changed',resource,
+                request.requestId,request.reasonCode,revision+1,{status=request.status,previousStatus=organization.status})
             local value = { organizationId = request.organizationId, previousStatus = organization.status,
                 status = request.status, revision = revision + 1, replayed = false }
             query([[UPDATE `feather_organization_lifecycle_receipts` SET `result_json`=?

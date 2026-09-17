@@ -267,7 +267,42 @@ invoking resource in `Config.Access.trustedReaders`. They return copies and are
 readiness-gated. No client may supply a trusted resource identity.
 
 Types are initial classifications, not capabilities or active organization
-entities. Runtime type registration/providers and broker audit publication remain
-future work. Restarting Core can stop this consumer; start it again after Core
+entities. Runtime type registration/providers remain future work.
+Restarting Core can stop this consumer; start it again after Core
 is ready. Cross-resource methods must be checked with IsCallable rather than
 Lua function-only checks when provider tables are introduced.
+
+## Audit history and publication
+
+Every new committed creation, lifecycle, identity, or parent change writes an
+audit record and outbox record in the same database transaction. Request replays
+do not enqueue another event. The server-only Core broker events are
+`organizations.organization.created.v1`, `organizations.organization.status_changed.v1`,
+`organizations.organization.identity_changed.v1`, and `organizations.organization.parent_changed.v1`.
+Payloads contain stable event/organization IDs, revision and request attribution,
+with relevant status/parent details; legal/display names are excluded.
+Publication is at least once: deduplicate by `eventId` and read authoritative
+current state. Published means broker acceptance, not durable subscriber receipt.
+Existing audit records are not backfilled into the outbox.
+
+`InspectOrganizationHistory({organizationId, limit?, cursor?})` requires an actual
+trusted auditor that is also a trusted reader. Non-privileged auditors may only
+inspect organizations created by their resource. Pages default to 20, maximum
+50, newest first by timestamp/event UUID, with `items` and optional `nextCursor`.
+Keep the organization ID unchanged when following cursors. This is a live view,
+not a frozen snapshot. No public/client history route is provided.
+
+After manifest changes run `refresh`, then `restart feather-organizations`.
+Run `OrganizationsEventContractSmokeTest` for 12/12 read-only checks.
+Live broker publication, pagination and request replay passed, including after
+restart. The separate fixture also passed creator-scoped audit access and
+injection rejection before/after restart.
+
+Development-only `OrganizationsEventRecoveryTest <stable requestId> prepare`
+stops publication using the existing publisher lifecycle and commits one test
+creation with a pending outbox record. Restart Organizations, then run the same
+command with `retry` to verify publication and exact creation replay. Always
+restart after prepare, including on failure: it pauses the whole publisher.
+The fixed test key requires retaining the original request ID on every rerun.
+Pending publication recovery passed across resource restart: the original event
+ID was published, creation replayed, and exactly one audit/outbox record remained.

@@ -14,6 +14,8 @@ server_scripts {
     'server/foundation.lua',
     'server/migrations.lua',
     'server/types.lua',
+    'server/events.lua',
+    'server/event_tests.lua',
     'server/organizations.lua',
     'server/lifecycle.lua',
     'server/directory.lua',

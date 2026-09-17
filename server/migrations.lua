@@ -78,6 +78,19 @@ local definitions = {
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (`source_resource`,`request_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
+    } },
+    { id = '006_organization_outbox', statements = {
+        [[CREATE TABLE IF NOT EXISTS `feather_organization_outbox` (
+            `event_id` CHAR(36) NOT NULL, `event_type` VARCHAR(100) NOT NULL,
+            `payload_json` LONGTEXT NOT NULL, `status` VARCHAR(16) NOT NULL DEFAULT 'pending',
+            `attempts` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            `available_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `published_at` TIMESTAMP NULL,
+            PRIMARY KEY (`event_id`), KEY `idx_organization_outbox_pending` (`status`,`available_at`),
+            CONSTRAINT `fk_organization_outbox_event` FOREIGN KEY (`event_id`) REFERENCES `feather_organization_events` (`event_id`),
+            CONSTRAINT `chk_organization_outbox_status` CHECK (`status` IN ('pending','published'))
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
     } }
 }
 local function Hash(value)

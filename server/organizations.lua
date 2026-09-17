@@ -141,10 +141,8 @@ function OrganizationIdentity.Create(request, resource)
             local created = Snapshot(rows[1])
             if not created.ok then return created end
             created.value.replayed = false
-            query([[INSERT INTO `feather_organization_events`
-                (`event_id`,`organization_id`,`event_type`,`source_resource`,`request_id`,`reason_code`,`revision`)
-                VALUES (UUID(),?,'organization.created',?,?,?,1)]],
-                { id, resource, request.requestId, request.reasonCode })
+            OrganizationEvents.Record(query,id,'organization.created',resource,request.requestId,request.reasonCode,1,
+                {status=created.value.status,organizationType=request.organizationType})
             query([[UPDATE `feather_organization_creation_receipts` SET `result_json`=?
                 WHERE `source_resource`=? AND `request_id`=?]], { json.encode(created.value), resource, request.requestId })
             return created

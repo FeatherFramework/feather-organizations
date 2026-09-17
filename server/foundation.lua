@@ -39,6 +39,7 @@ function Organizations.GetCapabilities()
             organizations = 1, durableCreation = 1, auditRecords = 1,
             organizationLifecycle = 1, hierarchy = 1,
             directory = 1, identityUpdates = 1,
+            outbox = 1, eventPublication = 1, auditHistory = 1,
             relationships = 0, controllingInterests = 0, affiliations = 0
         } })
 end
@@ -76,11 +77,27 @@ function Organizations.ValidateConfig()
         or type(Config.Access.trustedMutators) ~= 'table'
         or Config.Access.trustedMutators[GetCurrentResourceName()] ~= true
         or type(Config.Access.privilegedMutators) ~= 'table'
+        or type(Config.Access.trustedAuditors) ~= 'table'
+        or Config.Access.trustedAuditors[GetCurrentResourceName()] ~= true
+        or type(Config.Access.privilegedAuditors) ~= 'table'
         or type(Config.DevMode) ~= 'boolean' or type(Config.Authorization) ~= 'table'
         or type(Config.Authorization.enabled) ~= 'boolean'
         or type(Config.Authorization.createAction) ~= 'string' or Config.Authorization.createAction == ''
         or type(Config.Types) ~= 'table' or #Config.Types < 1 or #Config.Types > 32 then
         return Organizations.Err('invalid_config', 'Organization contract, readiness, access, or type configuration is invalid.')
+    end
+    if type(Config.Outbox)~='table' or not Organizations.Integer(Config.Outbox.pollIntervalMs,250,60000)
+        or not Organizations.Integer(Config.Outbox.retryDelaySeconds,1,3600)
+        or not Organizations.Integer(Config.Outbox.batchSize,1,100) then
+        return Organizations.Err('invalid_config','Outbox configuration is invalid.')
+    end
+    for _,group in ipairs({'trustedAuditors','privilegedAuditors'}) do
+        for resource,enabled in pairs(Config.Access[group]) do
+            if type(resource)~='string' or #resource<1 or #resource>100 or type(enabled)~='boolean'
+                or (enabled and Config.Access.trustedAuditors[resource]~=true) then
+                return Organizations.Err('invalid_config','Audit access configuration is invalid.')
+            end
+        end
     end
     for _, group in ipairs({ 'trustedMutators', 'privilegedMutators' }) do
         for resource, enabled in pairs(Config.Access[group]) do

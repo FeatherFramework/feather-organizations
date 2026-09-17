@@ -124,10 +124,8 @@ function OrganizationDirectory.Update(request,resource)
             if row.legal_name==request.legalName and row.display_name==request.displayName then return Err('no_change','Names are unchanged.') end
             query([[UPDATE `feather_organizations` SET `legal_name`=?,`display_name`=?,`revision`=`revision`+1
                 WHERE `organization_id`=? AND `revision`=?]],{request.legalName,request.displayName,request.organizationId,request.expectedRevision})
-            query([[INSERT INTO `feather_organization_events`
-                (`event_id`,`organization_id`,`event_type`,`source_resource`,`request_id`,`reason_code`,`revision`)
-                VALUES (UUID(),?,'organization.identity_changed',?,?,?,?)]],
-                {request.organizationId,resource,request.requestId,request.reasonCode,request.expectedRevision+1})
+            OrganizationEvents.Record(query,request.organizationId,'organization.identity_changed',resource,
+                request.requestId,request.reasonCode,request.expectedRevision+1)
             local value=snapshot.value
             value.legalName,value.displayName=request.legalName,request.displayName
             value.revision,value.replayed=request.expectedRevision+1,false

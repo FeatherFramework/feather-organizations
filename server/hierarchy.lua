@@ -123,10 +123,9 @@ function OrganizationHierarchy.Change(request,resource,operation)
             else query('DELETE FROM `feather_organization_parents` WHERE `organization_id`=?',{request.organizationId}) end
             query('UPDATE `feather_organizations` SET `revision`=`revision`+1 WHERE `organization_id`=? AND `revision`=?',
                 {request.organizationId,request.expectedRevision})
-            query([[INSERT INTO `feather_organization_events`
-                (`event_id`,`organization_id`,`event_type`,`source_resource`,`request_id`,`reason_code`,`revision`)
-                VALUES (UUID(),?,'organization.parent_changed',?,?,?,?)]],
-                {request.organizationId,resource,request.requestId,request.reasonCode,request.expectedRevision+1})
+            OrganizationEvents.Record(query,request.organizationId,'organization.parent_changed',resource,
+                request.requestId,request.reasonCode,request.expectedRevision+1,
+                {parentOrganizationId=parent,previousParentOrganizationId=previous})
             local value={organizationId=request.organizationId,parentOrganizationId=parent,
                 previousParentOrganizationId=previous,revision=request.expectedRevision+1,replayed=false}
             query([[UPDATE `feather_organization_hierarchy_receipts` SET `result_json`=?

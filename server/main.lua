@@ -20,6 +20,8 @@ CreateThread(function()
         if not loaded.ok then return loaded end
         local hierarchy = OrganizationHierarchy.CheckStartup()
         if not hierarchy.ok then return hierarchy end
+        local events = OrganizationEvents.Start()
+        if not events.ok then return events end
         Organizations.SetState('ready', 'ready')
         print(('[feather-organizations] event=startup.ready migrationsApplied=%d types=%d'):format(migrated.value.applied, loaded.value.types))
         return Organizations.Ok(true)
@@ -32,8 +34,10 @@ end)
 
 AddEventHandler('onResourceStop', function(resource)
     if resource == 'feather-core' or resource == 'oxmysql' then
+        OrganizationEvents.Stop()
         Organizations.Fail(Organizations.Err('dependency_unavailable', 'A required dependency stopped. Restart Organizations after it is ready.'))
     elseif resource == GetCurrentResourceName() then
+        OrganizationEvents.Stop()
         Organizations.SetState('stopped', 'resource_stopped')
     end
 end)
@@ -72,7 +76,7 @@ RegisterCommand('OrganizationsFoundationSmokeTest', function(source)
             { 'invalid rejected', not invalid.ok and invalid.code == 'invalid_input' },
             { 'await ready', Organizations.AwaitReady(0).ok },
             { 'persisted identity', business.ok and persisted and persisted.organization_type_id == business.value.organizationTypeId },
-            { 'migration ledger', tonumber(migrations) == 5 }
+            { 'migration ledger', tonumber(migrations) == 6 }
         }
         local passed = 0
         for _, test in ipairs(tests) do

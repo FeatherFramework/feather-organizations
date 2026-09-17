@@ -3,6 +3,7 @@ Config = {
     RequiredCoreContract = 1,
     ReadinessTimeoutMs = 30000,
     DevMode = true,
+    Outbox = { pollIntervalMs = 1000, retryDelaySeconds = 5, batchSize = 20 },
     Authorization = { enabled = false, createAction = 'organizations.organization.create',
         updateAction = 'organizations.organization.update',
         suspendAction = 'organizations.organization.suspend',
@@ -12,6 +13,8 @@ Config = {
         trustedCreators = { ['feather-organizations'] = true, ['feather-admin'] = true },
         trustedMutators = { ['feather-organizations'] = true, ['feather-admin'] = true },
         privilegedMutators = { ['feather-admin'] = true },
+        trustedAuditors = { ['feather-organizations'] = true, ['feather-admin'] = true },
+        privilegedAuditors = { ['feather-admin'] = true },
         trustedReaders = {
             ['feather-organizations'] = true,
             ['feather-admin'] = true,
@@ -32,4 +35,5 @@ if Config.DevMode then
     Config.Access.trustedReaders['feather-organizations-tests'] = true
     Config.Access.trustedCreators['feather-organizations-tests'] = true
     Config.Access.trustedMutators['feather-organizations-tests'] = true
+    Config.Access.trustedAuditors['feather-organizations-tests'] = true
 end
