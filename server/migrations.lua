@@ -1,0 +1,75 @@
+OrganizationMigrations = {}
+local definitions = {
+    { id = '001_organization_types', statements = {
+        [[CREATE TABLE IF NOT EXISTS `feather_organization_types` (
+            `organization_type_id` CHAR(36) NOT NULL,
+            `type_key` VARCHAR(48) NOT NULL,
+            `label` VARCHAR(100) NOT NULL,
+            `owner_resource` VARCHAR(100) NOT NULL,
+            `status` VARCHAR(16) NOT NULL DEFAULT 'active',
+            `revision` BIGINT UNSIGNED NOT NULL DEFAULT 1,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`organization_type_id`), UNIQUE KEY `uq_organization_type_key` (`type_key`),
+            CONSTRAINT `chk_organization_type_status` CHECK (`status` IN ('active','retired'))
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
+    } },
+    { id = '002_organization_identity', statements = {
+        [[CREATE TABLE IF NOT EXISTS `feather_organizations` (
+            `organization_id` CHAR(36) NOT NULL,
+            `organization_type_id` CHAR(36) NOT NULL,
+            `organization_key` VARCHAR(64) NOT NULL,
+            `legal_name` VARCHAR(160) NOT NULL, `display_name` VARCHAR(100) NOT NULL,
+            `status` VARCHAR(16) NOT NULL DEFAULT 'pending',
+            `created_by_resource` VARCHAR(100) NOT NULL,
+            `revision` BIGINT UNSIGNED NOT NULL DEFAULT 1,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`organization_id`), UNIQUE KEY `uq_organization_key` (`organization_key`),
+            CONSTRAINT `fk_organization_type` FOREIGN KEY (`organization_type_id`)
+                REFERENCES `feather_organization_types` (`organization_type_id`),
+            CONSTRAINT `chk_organization_status` CHECK (`status` IN ('pending','active','suspended','dissolving','dissolved'))
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]],
+        [[CREATE TABLE IF NOT EXISTS `feather_organization_creation_receipts` (
+            `source_resource` VARCHAR(100) NOT NULL, `request_id` VARCHAR(128) NOT NULL,
+            `request_fingerprint` LONGTEXT NOT NULL, `result_json` LONGTEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`source_resource`,`request_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]],
+        [[CREATE TABLE IF NOT EXISTS `feather_organization_events` (
+            `event_id` CHAR(36) NOT NULL, `organization_id` CHAR(36) NOT NULL,
+            `event_type` VARCHAR(64) NOT NULL, `source_resource` VARCHAR(100) NOT NULL,
+            `request_id` VARCHAR(128) NOT NULL, `reason_code` VARCHAR(64) NOT NULL,
+            `revision` BIGINT UNSIGNED NOT NULL, `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`event_id`), UNIQUE KEY `uq_organization_creation_event` (`source_resource`,`request_id`),
+            CONSTRAINT `fk_organization_event` FOREIGN KEY (`organization_id`)
+                REFERENCES `feather_organizations` (`organization_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
+    } }
+}
+local function Hash(value)
+    local hash = 2166136261
+    for index = 1, #value do hash = ((hash ~ value:byte(index)) * 16777619) & 0xffffffff end
+    return ('fnv1a32:%08x'):format(hash)
+end
+function OrganizationMigrations.Run()
+    MySQL.query.await([[CREATE TABLE IF NOT EXISTS `feather_organization_schema_migrations` (
+        `id` VARCHAR(100) NOT NULL, `checksum` VARCHAR(64) NOT NULL,
+        `applied_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (`id`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]])
+    local count = 0
+    for _, migration in ipairs(definitions) do
+        local checksum = Hash(table.concat(migration.statements, '\n-- next statement --\n'))
+        local applied = MySQL.single.await(
+            'SELECT `checksum` FROM `feather_organization_schema_migrations` WHERE `id`=?', { migration.id })
+        if applied and applied.checksum ~= checksum then
+            return Organizations.Err('migration_checksum_mismatch', 'An applied organization migration changed.', { migrationId = migration.id })
+        end
+        if not applied then
+            for _, statement in ipairs(migration.statements) do MySQL.query.await(statement) end
+            MySQL.insert.await('INSERT INTO `feather_organization_schema_migrations` (`id`,`checksum`) VALUES (?,?)',
+                { migration.id, checksum })
+            count = count + 1
+        end
+    end
+    return Organizations.Ok({ total = #definitions, applied = count })
+end
