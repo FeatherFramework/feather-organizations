@@ -37,7 +37,7 @@ function Organizations.GetCapabilities()
         state = health.state, features = {
             lifecycle = 1, health = 1, migrations = 1, types = 1,
             organizations = 1, durableCreation = 1, auditRecords = 1,
-            organizationLifecycle = 0, hierarchy = 0,
+            organizationLifecycle = 1, hierarchy = 0,
             relationships = 0, controllingInterests = 0, affiliations = 0
         } })
 end
@@ -72,11 +72,27 @@ function Organizations.ValidateConfig()
         or Config.Access.trustedReaders[GetCurrentResourceName()] ~= true
         or type(Config.Access.trustedCreators) ~= 'table'
         or Config.Access.trustedCreators[GetCurrentResourceName()] ~= true
+        or type(Config.Access.trustedMutators) ~= 'table'
+        or Config.Access.trustedMutators[GetCurrentResourceName()] ~= true
+        or type(Config.Access.privilegedMutators) ~= 'table'
         or type(Config.DevMode) ~= 'boolean' or type(Config.Authorization) ~= 'table'
         or type(Config.Authorization.enabled) ~= 'boolean'
         or type(Config.Authorization.createAction) ~= 'string' or Config.Authorization.createAction == ''
         or type(Config.Types) ~= 'table' or #Config.Types < 1 or #Config.Types > 32 then
         return Organizations.Err('invalid_config', 'Organization contract, readiness, access, or type configuration is invalid.')
+    end
+    for _, group in ipairs({ 'trustedMutators', 'privilegedMutators' }) do
+        for resource, enabled in pairs(Config.Access[group]) do
+            if type(resource) ~= 'string' or #resource < 1 or #resource > 100 or type(enabled) ~= 'boolean'
+                or (enabled and Config.Access.trustedMutators[resource] ~= true) then
+                return Organizations.Err('invalid_config', 'Mutator configuration is invalid.')
+            end
+        end
+    end
+    for _, action in ipairs({ 'updateAction', 'suspendAction', 'dissolveAction' }) do
+        if type(Config.Authorization[action]) ~= 'string' or Config.Authorization[action] == '' then
+            return Organizations.Err('invalid_config', 'Lifecycle authorization actions are required.')
+        end
     end
     for resource, enabled in pairs(Config.Access.trustedCreators) do
         if type(resource) ~= 'string' or #resource < 1 or #resource > 100 or type(enabled) ~= 'boolean' then

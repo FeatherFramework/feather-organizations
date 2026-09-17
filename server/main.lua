@@ -70,7 +70,7 @@ RegisterCommand('OrganizationsFoundationSmokeTest', function(source)
             { 'invalid rejected', not invalid.ok and invalid.code == 'invalid_input' },
             { 'await ready', Organizations.AwaitReady(0).ok },
             { 'persisted identity', business.ok and persisted and persisted.organization_type_id == business.value.organizationTypeId },
-            { 'migration ledger', tonumber(migrations) == 2 }
+            { 'migration ledger', tonumber(migrations) == 3 }
         }
         local passed = 0
         for _, test in ipairs(tests) do

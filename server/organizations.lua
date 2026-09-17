@@ -110,6 +110,11 @@ function OrganizationIdentity.Create(request, resource)
                 value.replayed = true
                 return Ok(value)
             end
+            local events = query([[SELECT `event_id` FROM `feather_organization_events`
+                WHERE `source_resource`=? AND `request_id`=?]], { resource, request.requestId }) or {}
+            if #events > 0 then
+                return Err('idempotency_conflict', 'Request ID already belongs to another organization operation.')
+            end
             local types = query([[SELECT `organization_type_id`,`status` FROM `feather_organization_types`
                 WHERE `type_key`=? FOR UPDATE]], { request.organizationType }) or {}
             if not types[1] then return Err('type_not_found', 'Organization type not found.') end

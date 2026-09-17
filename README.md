@@ -8,9 +8,9 @@ permissions, or shop presentation. Native Feather; no legacy compatibility layer
 Contract 1 flat results, bounded readiness, defensive trusted type reads, and
 checksummed resource-owned migrations. Initial types: business, government,
 government_agency. Persisted UUIDs survive restart; display labels do not define
-authority. Durable organization creation/read is now implemented. Status mutation,
-hierarchy, interests, membership, client RPC, and gameplay UI remain unavailable
-and are reported as zero. Next slice adds revision-checked lifecycle transitions.
+authority. Durable organization creation/read and lifecycle transitions are now
+implemented. Hierarchy, interests, membership, client RPC, and gameplay UI remain
+unavailable and are reported as zero.
 
 Only Organizations writes `feather_organization_types` and
 `feather_organization_schema_migrations`. Configured labels sync on startup
@@ -47,7 +47,7 @@ Trusted `GetOrganization({ organizationId })` and
 Creation owns `feather_organizations`, `feather_organization_creation_receipts`,
 and `feather_organization_events`. Audit records are durable database facts;
 broker publication/outbox delivery and audit query APIs are not implemented yet.
-Lifecycle transitions, identity edits, pagination, and hierarchy remain deferred.
+Identity edits, pagination, and hierarchy remain deferred.
 
 First run `OrganizationsCreationContractSmokeTest` (12/12, no entities created).
 Then use `OrganizationsCreationLiveTest org-creation-001` with DevMode enabled.
@@ -55,6 +55,72 @@ It creates one real pending entity using fixed key `org_creation_test`, verifies
 same-ID replay, payload conflict, global key conflict, and one entity/audit row.
 Restart and repeat the exact original request ID; never use a fresh key/ID to
 recover this test. Disable DevMode and configure authorization before deployment.
+
+## Revision-checked lifecycle
+
+`ChangeOrganizationStatus(request)` accepts exactly `organizationId`,
+`expectedRevision`, `status`, `requestId`, and `reasonCode`. Revision is a numeric
+integer, not a string. UUIDs normalize to lowercase. Stable request IDs/reasons
+follow creation's limits. Use distinct IDs for creation and each intended change;
+the audit namespace reserves each caller/request ID across organization operations.
+
+Mandatory trust: `trustedMutators` plus trusted read access. Ordinary mutators
+can change only organizations created by that resource. `privilegedMutators`
+explicitly permits cross-resource administration (Admin is configured). Optional
+Core update/suspend/dissolve actions apply when Authorization is enabled.
+This is resource-level control, not player ownership, membership, or job authority.
+
+Allowed transitions:
+
+- pending → active or dissolving
+- active → suspended or dissolving
+- suspended → active or dissolving
+- dissolving → dissolved
+- dissolved → none
+
+Skipping dissolution, same-status changes, and terminal reactivation are rejected.
+Lock the entity and compare expected revision inside the transaction. A successful
+change increments revision once and atomically writes its payload-bound lifecycle
+receipt and append-only audit event. Stale/invalid changes roll back the receipt.
+Exact replay returns the original resulting revision/status, even if later changes
+occurred; current reads remain the current-state authority. Altered retry payloads
+fail. Retain the original request after timeout rather than issue a new one.
+
+Dissolution does not delete the entity/free its key or touch accounts, employment,
+property, licenses, or other domains. A trusted coordinating workflow must finish
+any required downstream cleanup before explicitly completing dissolution; this
+slice does not verify those external obligations or provide a worker for them.
+
+Run `OrganizationsLifecycleContractSmokeTest`: expect 15/15, no state changes.
+Dev-only `OrganizationsLifecycleLiveTest org-lifecycle-001` creates a separate
+fixed-key test entity, activates/suspends/resumes it, stages/completes dissolution,
+and verifies exact replay, changed-payload rejection, stale revision rejection,
+terminal protection, six audit events, and rejected-receipt rollback. It never
+touches the original creation-test entity, money, or items. Restart then repeat
+the exact ID; expect dissolved revision 6 with allReplayed=true and still six
+events. After these manifest additions run refresh before restarting the resource.
+
+## Contention and real export-boundary acceptance
+
+`OrganizationsConcurrencyTest org-concurrency-001` is dev-only. It creates one
+separate entity at fixed key `org_concurrency_test`, then concurrently submits
+activation and begin-dissolution against revision 1 using distinct request IDs.
+Either contender may win: expect exactly one success, one `revision_conflict`,
+revision 2, two audit events (creation + winner), one lifecycle receipt, and
+successful exact winner replay. Loser receipt reservation must roll back.
+The test uses an explicit completion counter and a 30-second watchdog; timeout
+does not cancel database work. Retain IDs and inspect state rather than create
+another attempt under new IDs. Repeating the original command checks stored
+winner replay; it is not another fresh contention measurement.
+
+Optional `feather-organizations-tests` exercises real Cfx calls from a different
+resource. With DevMode true, it receives reader/creator/mutator trust but never
+privileged override. `OrganizationsOwnershipBoundaryTest org-ownership-001`
+rejects foreign mutation and caller injection, preserves the creation-test
+organization, and allows/replays a separate fixture-owned entity's activation.
+See its README for deployment. It is not shipped in default startup/recipe.
+Stop/remove the fixture and disable DevMode before production. These acceptance
+tests remain pending; they do not certify Core policy/provider failure behavior.
 
 ## Installation and first acceptance
 
