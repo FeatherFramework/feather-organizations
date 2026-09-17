@@ -5,7 +5,9 @@ local names={
     ['organization.created']='organizations.organization.created.v1',
     ['organization.status_changed']='organizations.organization.status_changed.v1',
     ['organization.identity_changed']='organizations.organization.identity_changed.v1',
-    ['organization.parent_changed']='organizations.organization.parent_changed.v1'
+    ['organization.parent_changed']='organizations.organization.parent_changed.v1',
+    ['organization.interest_granted']='organizations.organization.interest_granted.v1',
+    ['organization.interest_revoked']='organizations.organization.interest_revoked.v1'
 }
 function OrganizationEvents.Record(query,organizationId,eventType,resource,requestId,reason,revision,details)
     local rows=query('SELECT UUID() AS id') or {}
@@ -13,7 +15,7 @@ function OrganizationEvents.Record(query,organizationId,eventType,resource,reque
     if not Organizations.Uuid(eventId) or not names[eventType] then error('Invalid organization event identity/type.') end
     local payload={eventId=eventId,organizationId=organizationId,revision=revision,
         sourceResource=resource,requestId=requestId,reasonCode=reason}
-    for _,field in ipairs({'status','previousStatus','organizationType','parentOrganizationId','previousParentOrganizationId'}) do
+    for _,field in ipairs({'status','previousStatus','organizationType','parentOrganizationId','previousParentOrganizationId','interestId','interestType','interestStatus'}) do
         if details and details[field]~=nil then payload[field]=details[field] end
     end
     query([[INSERT INTO `feather_organization_events`

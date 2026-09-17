@@ -20,6 +20,7 @@ server_scripts {
     'server/lifecycle.lua',
     'server/directory.lua',
     'server/hierarchy.lua',
+    'server/interests.lua',
     'server/hierarchy_tests.lua',
     'server/directory_tests.lua',
     'server/lifecycle_tests.lua',

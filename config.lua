@@ -8,7 +8,7 @@ Config = {
         updateAction = 'organizations.organization.update',
         suspendAction = 'organizations.organization.suspend',
         dissolveAction = 'organizations.organization.dissolve',
-        hierarchyAction = 'organizations.relationship.manage' },
+        hierarchyAction = 'organizations.relationship.manage', interestAction = 'organizations.interest.manage' },
     Access = {
         trustedCreators = { ['feather-organizations'] = true, ['feather-admin'] = true },
         trustedMutators = { ['feather-organizations'] = true, ['feather-admin'] = true },

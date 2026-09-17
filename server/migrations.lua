@@ -91,6 +91,23 @@ local definitions = {
             CONSTRAINT `fk_organization_outbox_event` FOREIGN KEY (`event_id`) REFERENCES `feather_organization_events` (`event_id`),
             CONSTRAINT `chk_organization_outbox_status` CHECK (`status` IN ('pending','published'))
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
+    } },
+    { id = '007_organization_interests', statements = {
+        [[CREATE TABLE IF NOT EXISTS `feather_organization_interests` (
+            `interest_id` CHAR(36) NOT NULL, `organization_id` CHAR(36) NOT NULL,
+            `interest_type` VARCHAR(48) NOT NULL, `holder_type` VARCHAR(24) NOT NULL,
+            `holder_id` CHAR(36) NOT NULL, `status` VARCHAR(16) NOT NULL,
+            `revision` BIGINT UNSIGNED NOT NULL, `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`interest_id`), UNIQUE KEY `uq_organization_interest` (`organization_id`,`interest_type`,`holder_type`,`holder_id`),
+            CONSTRAINT `fk_interest_organization` FOREIGN KEY (`organization_id`) REFERENCES `feather_organizations` (`organization_id`),
+            CONSTRAINT `chk_interest_status` CHECK (`status` IN ('active','revoked'))
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]],
+        [[CREATE TABLE IF NOT EXISTS `feather_organization_interest_receipts` (
+            `source_resource` VARCHAR(100) NOT NULL, `request_id` VARCHAR(128) NOT NULL,
+            `request_fingerprint` LONGTEXT NOT NULL, `result_json` LONGTEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`source_resource`,`request_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]
     } }
 }
 local function Hash(value)

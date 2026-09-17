@@ -141,3 +141,79 @@ RegisterCommand('OrganizationsIdentityLifecycleConcurrencyTest',function(source,
         if not called then print('[OrganizationsIdentityLifecycleConcurrencyTest] FAIL ' .. tostring(reason)) end
     end)
 end,true)
+local interestRunning=false
+RegisterCommand('OrganizationsInterestConcurrencyTest',function(source,args)
+    if source~=0 or not Config.DevMode then return end
+    if interestRunning then print('[OrganizationsInterestConcurrencyTest] FAIL already running');return end
+    if #args~=2 or #args[1]>100 or not args[1]:match('^[A-Za-z0-9][A-Za-z0-9._:%-]*$') or not Organizations.Uuid(args[2]) then
+        print('[OrganizationsInterestConcurrencyTest] FAIL use <stable requestId> <character UUID>');return
+    end
+    interestRunning=true
+    CreateThread(function()
+        local called,reason=xpcall(function()
+            local name='OrganizationsInterestConcurrencyTest'
+            local owner=GetCurrentResourceName()
+            local function Require(result)
+                assert(result.ok,tostring(result.code)..': '..tostring(result.message));return result.value
+            end
+            assert(Organizations.AwaitReady(0).ok,'Service not ready')
+            print('['..name..'] started')
+            local created=Require(OrganizationIdentity.Create({requestId=args[1]..':create',organizationType='business',
+                organizationKey='org_interest_race',legalName='Organization Interest Race Company',displayName='Interest Race',
+                reasonCode='development.interest_race'},owner))
+            local id=created.organizationId
+            local requests={}
+            for index,kind in ipairs({'owner','founder'}) do
+                requests[index]={organizationId=id,expectedRevision=1,requestId=args[1]..':'..kind,
+                    interestType=kind,holderType='character',holderId=args[2]:lower(),reasonCode='development.interest_race'}
+            end
+            local outcomes,finished={},0
+            for index=1,2 do
+                local slot=index
+                CreateThread(function()
+                    local ok,result=xpcall(function() return OrganizationInterests.Change(requests[slot],owner,'grant') end,debug.traceback)
+                    outcomes[slot]=ok and result or Organizations.Err('internal_error','Interest contender failed.')
+                    finished=finished+1
+                    print(('[%s] contender=%d ok=%s code=%s'):format(name,slot,tostring(outcomes[slot].ok),tostring(outcomes[slot].code)))
+                end)
+            end
+            local started=GetGameTimer()
+            while finished<2 and GetGameTimer()-started<30000 do Wait(50) end
+            assert(finished==2,'Timeout; retain original IDs and inspect state before retrying. Database work is not cancelled.')
+            local committed,stale,winner=0,0,nil
+            for index=1,2 do
+                if outcomes[index].ok then committed=committed+1;winner=index
+                elseif outcomes[index].code=='revision_conflict' then stale=stale+1 end
+            end
+            assert(committed==1 and stale==1,'Expected exactly one commit and one revision conflict')
+            local replay=Require(OrganizationInterests.Change(requests[winner],owner,'grant'))
+            assert(replay.replayed and replay.interestId==outcomes[winner].value.interestId,'Winner receipt did not replay')
+            local current=Require(OrganizationIdentity.Get({organizationId=id},owner))
+            assert(current.revision==2 and current.status=='pending','Organization state inconsistent')
+            local interests=MySQL.query.await('SELECT * FROM `feather_organization_interests` WHERE `organization_id`=?',{id}) or {}
+            assert(#interests==1 and interests[1].interest_id==replay.interestId and interests[1].interest_type==requests[winner].interestType
+                and interests[1].holder_id==args[2]:lower() and interests[1].status=='active' and tonumber(interests[1].revision)==2,
+                'Interest state is not winner-only')
+            local events=MySQL.query.await('SELECT `event_id`,`request_id`,`revision` FROM `feather_organization_events` WHERE `organization_id`=?',{id}) or {}
+            assert(#events==2,'Expected creation and one grant audit event')
+            local grantEvent
+            for _,event in ipairs(events) do
+                if event.request_id==requests[winner].requestId then grantEvent=event end
+            end
+            assert(grantEvent and tonumber(grantEvent.revision)==2,'Winner audit missing')
+            local receipts=MySQL.query.await([[SELECT `request_id` FROM `feather_organization_interest_receipts`
+                WHERE `source_resource`=? AND `request_id` IN (?,?)]],{owner,requests[1].requestId,requests[2].requestId}) or {}
+            assert(#receipts==1 and receipts[1].request_id==requests[winner].requestId,'Loser receipt persisted')
+            local outbox=MySQL.query.await([[SELECT o.event_id,o.payload_json FROM `feather_organization_outbox` o
+                JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?]],{id}) or {}
+            assert(#outbox==2,'Outbox count inconsistent')
+            local payload
+            for _,row in ipairs(outbox) do if row.event_id==grantEvent.event_id then payload=json.decode(row.payload_json) end end
+            assert(payload and payload.interestId==replay.interestId and payload.holderId==nil,'Grant outbox identity/privacy invalid')
+            print(('[%s] PASS id=%s committed=1 stale=1 winner=%s revision=2 interests=1 events=2 outbox=2 receipts=1 winnerReplayed=true consistent=true'):format(
+                name,id,requests[winner].interestType))
+        end,debug.traceback)
+        interestRunning=false
+        if not called then print('[OrganizationsInterestConcurrencyTest] FAIL '..tostring(reason)) end
+    end)
+end,true)

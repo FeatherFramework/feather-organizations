@@ -46,7 +46,7 @@ Trusted `GetOrganization({ organizationId })` and
 `FindOrganizationByKey({ organizationKey })` return current defensive snapshots.
 Creation owns `feather_organizations`, `feather_organization_creation_receipts`,
 and `feather_organization_events`. Audit records are durable database facts;
-broker publication/outbox delivery and audit query APIs are not implemented yet.
+broker publication, outbox delivery and audit query APIs are documented below.
 Bounded listing, name edits, and single-parent hierarchy are documented below.
 
 First run `OrganizationsCreationContractSmokeTest` (12/12, no entities created).
@@ -273,6 +273,70 @@ is ready. Cross-resource methods must be checked with IsCallable rather than
 Lua function-only checks when provider tables are introduced.
 
 ## Audit history and publication
+
+## Controlling-interest preparation
+
+`ListOrganizationInterestTypes()` provides an isolated trusted-reader catalog:
+character founders, character/organization owners, and organization controllers.
+These are control facts, not employment or access grants. Shares and percentages
+are excluded. Strict internal grant validation binds the organization, holder,
+type, expected revision and reason; self-control and injected fields are rejected.
+Durable grant/revoke exports are now implemented (`controllingInterests=1`,
+`interestTypes=1`), with character-owner acceptance passed. UUID shape validation alone does not
+establish holder existence. Run `OrganizationsInterestContractSmokeTest`
+for 18 checks with no interests created.
+
+Internal holder resolution uses Character's persisted Contract 1 profile provider,
+not a player session or direct Character table access. Character holders and
+organization holders must be active; unavailable providers, mismatched identities,
+missing and inactive holders fail closed. Only type/UUID/status are projected.
+This adds no Character dependency to Organizations startup: character resolution
+is readiness-gated when invoked. No public holder lookup route/export is added.
+Run `OrganizationsHolderContractSmokeTest` for 10 read-only checks, then
+`OrganizationsHolderLiveTest character <UUID>` with the character offline to
+verify real persisted lookup. Real offline character and active organization
+lookup acceptance passed; the holder contract passed 10/10.
+
+`GrantOrganizationInterest(request)` and `RevokeOrganizationInterest(request)`
+accept exactly `organizationId`, `expectedRevision`, `requestId`, `reasonCode`,
+`interestType`, `holderType`, and `holderId`. Actual trusted mutators must own the
+target organization or have configured privileged override. Optional Core policy
+uses `organizations.interest.manage`. Both operations advance the shared target
+revision and atomically persist the interest state, payload-bound receipt, audit
+and outbox event. Replays return the original receipt without altering current
+state. The holder/type tuple has one stable interest UUID; regranting a revoked
+tuple reuses it. Same-state changes reject rather than create another interest.
+Grants require an active persisted holder and a pending/active/suspended target.
+Revokes allow dissolving targets and do not require the holder to remain active
+or present; dissolved targets reject fresh changes. This does not impose exclusive
+ownership, control inheritance, shares, employment, or automatic access rights.
+Character validation uses its provider, not a cross-domain SQL transaction;
+future deletion reconciliation remains a separate integration gate.
+The new server-only events `organizations.organization.interest_granted.v1` and
+`organizations.organization.interest_revoked.v1` include interest UUID/type/status,
+but omit holder UUIDs and private names. No public interest listing is added yet.
+
+Development-only `OrganizationsInterestLiveTest <stable requestId> <character UUID>`
+creates one fixed-key organization and grants, revokes, then regrants one owner
+interest. It checks stable interest identity, original receipt replay without
+reverting current state, stale/no-op/mismatch/missing-holder rejection, rejection
+rollback and event privacy. Expect revision 4, one active interest, three interest
+receipts, and four audit/outbox records including creation. Repeat the exact
+request ID and character UUID after restart; do not use fresh IDs to recover the
+fixed key. No money, inventory, employment or permissions are changed.
+
+`OrganizationsInterestConcurrencyTest <stable requestId> <character UUID>` submits
+owner/founder grants at the same revision on a separate fixed-key organization.
+Expect one commit, one revision conflict, revision 2, one interest/receipt and two
+audit/outbox records including creation. Repeat the exact IDs after restart to
+verify winner replay. The watchdog bounds the test wait, not database execution.
+Live and restart acceptance passed with founder winning, one stale owner grant,
+revision 2, one interest/receipt and two audit/outbox records. Character-owner
+grant/revoke/regrant and separate export ownership boundaries also passed before
+and after restart. Organization-holder mutations, bounded private interest reads,
+mixed-operation races and production authorization tests remain pending.
+
+## Event publication
 
 Every new committed creation, lifecycle, identity, or parent change writes an
 audit record and outbox record in the same database transaction. Request replays

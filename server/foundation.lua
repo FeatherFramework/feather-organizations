@@ -39,8 +39,8 @@ function Organizations.GetCapabilities()
             organizations = 1, durableCreation = 1, auditRecords = 1,
             organizationLifecycle = 1, hierarchy = 1,
             directory = 1, identityUpdates = 1,
-            outbox = 1, eventPublication = 1, auditHistory = 1,
-            relationships = 0, controllingInterests = 0, affiliations = 0
+            outbox = 1, eventPublication = 1, auditHistory = 1, interestTypes = 1,
+            relationships = 0, controllingInterests = 1, affiliations = 0
         } })
 end
 function Organizations.AwaitReady(timeoutMs)
@@ -107,7 +107,7 @@ function Organizations.ValidateConfig()
             end
         end
     end
-    for _, action in ipairs({ 'updateAction', 'suspendAction', 'dissolveAction', 'hierarchyAction' }) do
+    for _, action in ipairs({ 'updateAction', 'suspendAction', 'dissolveAction', 'hierarchyAction', 'interestAction' }) do
         if type(Config.Authorization[action]) ~= 'string' or Config.Authorization[action] == '' then
             return Organizations.Err('invalid_config', 'Lifecycle authorization actions are required.')
         end
