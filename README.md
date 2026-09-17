@@ -361,6 +361,27 @@ mixed-operation races and production authorization tests remain pending.
 
 ## Event publication
 
+`OrganizationsInterestHolderLifecycleTest <stable requestId>` creates a target
+and organization controller, activates the holder and grants a controller interest.
+It suspends the holder, rejects a fresh owner grant, reads and revokes the existing
+interest, resumes the holder and regrants the same controller tuple. Expect both
+organizations at revision 4, one active interest with stable UUID and eight total
+audit/outbox records. Repeat the original request ID after restart. This verifies
+explicit cleanup, not cascading status changes or inferred access permissions.
+Live and restart holder suspension/resume acceptance passed with stable IDs,
+both revisions at 4 and eight audit/outbox records.
+
+`OrganizationsHolderGrantConcurrencyTest <stable requestId>` races organization
+holder suspension against a new controller grant on a different target. Both may
+commit if grant locks/validates the active holder first (five total audit/outbox
+records); otherwise grant rejects `holder_inactive` (four records, no grant receipt).
+The holder ends suspended at revision 3; the target is revision 2 or 1 accordingly.
+Suspension does not revoke a previously committed interest. Repeat the original
+ID after restart to verify persisted outcomes and replay, not a fresh race.
+Live and restart acceptance passed for suspension-first: holder revision 3,
+target revision 1, zero interests, four audit/outbox records and no grant receipt.
+The grant-first concurrency branch is supported by the test but not yet accepted.
+
 Development-only `OrganizationsInterestLifecycleTest <stable requestId> <character UUID>`
 creates a separate fixed-key organization, grants one owner, starts dissolution,
 rejects new grants, revokes the existing interest and finishes dissolution.

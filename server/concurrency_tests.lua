@@ -291,3 +291,84 @@ RegisterCommand('OrganizationsInterestLifecycleConcurrencyTest',function(source,
         if not called then print('[OrganizationsInterestLifecycleConcurrencyTest] FAIL '..tostring(reason)) end
     end)
 end,true)
+local holderRaceRunning=false
+RegisterCommand('OrganizationsHolderGrantConcurrencyTest',function(source,args)
+    if source~=0 or not Config.DevMode then return end
+    if holderRaceRunning then print('[OrganizationsHolderGrantConcurrencyTest] FAIL already running');return end
+    if #args~=1 or #args[1]>100 or not args[1]:match('^[A-Za-z0-9][A-Za-z0-9._:%-]*$') then
+        print('[OrganizationsHolderGrantConcurrencyTest] FAIL use <stable requestId>');return
+    end
+    holderRaceRunning=true
+    CreateThread(function()
+        local called,reason=xpcall(function()
+            local name='OrganizationsHolderGrantConcurrencyTest'
+            local owner=GetCurrentResourceName()
+            local function Require(result) assert(result.ok,tostring(result.code)..': '..tostring(result.message));return result.value end
+            assert(Organizations.AwaitReady(0).ok,'Service not ready')
+            print('['..name..'] started')
+            local function Create(suffix)
+                return Require(OrganizationIdentity.Create({requestId=args[1]..':create_'..suffix,organizationType='business',
+                    organizationKey='org_holder_grant_race_'..suffix,legalName='Organization Holder Grant Race '..suffix,
+                    displayName='Holder Grant Race '..suffix,reasonCode='development.holder_grant_race'},owner))
+            end
+            local target,holder=Create('target'),Create('holder')
+            Require(OrganizationLifecycle.Change({organizationId=holder.organizationId,expectedRevision=1,status='active',
+                requestId=args[1]..':activate',reasonCode='development.holder_grant_race'},owner))
+            local grant={organizationId=target.organizationId,expectedRevision=1,interestType='controlling_organization',
+                holderType='organization',holderId=holder.organizationId,requestId=args[1]..':grant',reasonCode='development.holder_grant_race'}
+            local suspend={organizationId=holder.organizationId,expectedRevision=2,status='suspended',
+                requestId=args[1]..':suspend',reasonCode='development.holder_grant_race'}
+            local operations={function() return OrganizationInterests.Change(grant,owner,'grant') end,
+                function() return OrganizationLifecycle.Change(suspend,owner) end}
+            local outcomes,finished={},0
+            for index=1,2 do
+                local slot=index
+                CreateThread(function()
+                    local ok,result=xpcall(operations[slot],debug.traceback)
+                    outcomes[slot]=ok and result or Organizations.Err('internal_error','Holder race child failed.')
+                    finished=finished+1
+                    print(('[%s] contender=%s ok=%s code=%s'):format(name,slot==1 and 'grant' or 'suspend',
+                        tostring(outcomes[slot].ok),tostring(outcomes[slot].code)))
+                end)
+            end
+            local started=GetGameTimer()
+            while finished<2 and GetGameTimer()-started<30000 do Wait(50) end
+            assert(finished==2,'Timeout; retain request ID and inspect state. Database work is not cancelled.')
+            local suspension=Require(outcomes[2])
+            local granted=outcomes[1].ok==true
+            assert(granted or outcomes[1].code=='holder_inactive','Unexpected grant outcome')
+            local grantReplay=operations[1]()
+            local suspendReplay=Require(operations[2]())
+            assert(suspendReplay.replayed and suspendReplay.revision==3 and suspension.revision==3,'Suspension replay inconsistent')
+            if granted then
+                assert(grantReplay.ok and grantReplay.value.replayed and grantReplay.value.interestId==outcomes[1].value.interestId,
+                    'Committed grant did not replay after suspension')
+            else
+                assert(not grantReplay.ok and grantReplay.code=='holder_inactive','Suspended holder retry accepted')
+            end
+            local holderState=Require(OrganizationIdentity.Get({organizationId=holder.organizationId},owner))
+            local targetState=Require(OrganizationIdentity.Get({organizationId=target.organizationId},owner))
+            local interests=Require(OrganizationInterests.List({organizationId=target.organizationId},owner)).items
+            assert(holderState.status=='suspended' and holderState.revision==3 and targetState.status=='pending'
+                and targetState.revision==(granted and 2 or 1) and #interests==(granted and 1 or 0),'Holder/target state inconsistent')
+            if granted then
+                assert(interests[1].interestId==grantReplay.value.interestId and interests[1].holderId==holder.organizationId
+                    and interests[1].status=='active','Previously committed interest changed implicitly')
+            end
+            local counts=MySQL.single.await([[SELECT
+                (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id IN (?,?)) AS events,
+                (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id IN (?,?)) AS outbox,
+                (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS grants,
+                (SELECT COUNT(*) FROM `feather_organization_lifecycle_receipts` WHERE source_resource=? AND request_id=?) AS suspensions]],
+                {target.organizationId,holder.organizationId,target.organizationId,holder.organizationId,owner,grant.requestId,owner,suspend.requestId})
+            local expected=granted and 5 or 4
+            assert(tonumber(counts.events)==expected and tonumber(counts.outbox)==expected
+                and tonumber(counts.grants)==(granted and 1 or 0) and tonumber(counts.suspensions)==1,'Race atomic counts inconsistent')
+            print(('[%s] PASS target=%s holder=%s grant=%s holderState=suspended holderRevision=3 targetRevision=%d interests=%d events=%d outbox=%d replayConsistent=true noImplicitRevocation=true'):format(
+                name,target.organizationId,holder.organizationId,granted and 'committed_before_suspend' or 'holder_inactive',
+                targetState.revision,#interests,expected,expected))
+        end,debug.traceback)
+        holderRaceRunning=false
+        if not called then print('[OrganizationsHolderGrantConcurrencyTest] FAIL '..tostring(reason)) end
+    end)
+end,true)

@@ -306,6 +306,67 @@ RegisterCommand('OrganizationsInterestReadContractSmokeTest',function(source)
 end,true)
 
 local interestLiveRunning=false
+RegisterCommand('OrganizationsInterestHolderLifecycleTest',function(source,args)
+    if source~=0 or not Config.DevMode then return end
+    if interestLiveRunning then print('[OrganizationsInterestHolderLifecycleTest] FAIL already running');return end
+    interestLiveRunning=true
+    local called,reason=xpcall(function()
+        assert(#args==1 and #args[1]<=100,'Use <stable requestId>')
+        assert(Organizations.AwaitReady(0).ok,'Service not ready')
+        local owner=GetCurrentResourceName()
+        local function Require(result) assert(result.ok,tostring(result.code)..': '..tostring(result.message));return result.value end
+        local function Create(suffix)
+            return Require(OrganizationIdentity.Create({requestId=args[1]..':create_'..suffix,organizationType='business',
+                organizationKey='org_interest_holder_'..suffix,legalName='Organization Interest Holder '..suffix,
+                displayName='Interest Holder '..suffix,reasonCode='development.interest_holder_lifecycle'},owner))
+        end
+        local target,holder=Create('target'),Create('controller')
+        local function Transition(revision,status,suffix)
+            return Require(OrganizationLifecycle.Change({organizationId=holder.organizationId,expectedRevision=revision,status=status,
+                requestId=args[1]..':'..suffix,reasonCode='development.interest_holder_lifecycle'},owner))
+        end
+        Transition(1,'active','activate')
+        local grant={organizationId=target.organizationId,expectedRevision=1,interestType='controlling_organization',
+            holderType='organization',holderId=holder.organizationId,requestId=args[1]..':grant',reasonCode='development.interest_holder_lifecycle'}
+        local granted=Require(OrganizationInterests.Change(grant,owner,'grant'))
+        Transition(2,'suspended','suspend')
+        local before=Require(OrganizationIdentity.Get({organizationId=holder.organizationId},owner))
+        if before.status=='suspended' then
+            local blocked=Organizations.Copy(grant);blocked.expectedRevision=2;blocked.interestType='owner';blocked.requestId=args[1]..':blocked'
+            local denied=OrganizationInterests.Change(blocked,owner,'grant')
+            assert(not denied.ok and denied.code=='holder_inactive','Suspended holder grant accepted')
+            local read=Require(OrganizationInterests.List({organizationId=target.organizationId,status='active'},owner))
+            assert(#read.items==1 and read.items[1].interestId==granted.interestId,'Inactive holder interest not readable')
+        else
+            assert(before.status=='active' and before.revision==4,'Unexpected holder replay state')
+        end
+        local revoke=Organizations.Copy(grant);revoke.expectedRevision=2;revoke.requestId=args[1]..':revoke'
+        local revoked=Require(OrganizationInterests.Change(revoke,owner,'revoke'))
+        assert(revoked.interestId==granted.interestId and revoked.status=='revoked','Inactive holder cleanup failed')
+        Transition(3,'active','resume')
+        local regrant=Organizations.Copy(grant);regrant.expectedRevision=3;regrant.requestId=args[1]..':regrant'
+        local restored=Require(OrganizationInterests.Change(regrant,owner,'grant'))
+        local replay=Require(OrganizationInterests.Change(grant,owner,'grant'))
+        assert(restored.interestId==granted.interestId and replay.replayed and replay.revision==2,'Stable identity/original receipt failed')
+        local targetState=Require(OrganizationIdentity.Get({organizationId=target.organizationId},owner))
+        local holderState=Require(OrganizationIdentity.Get({organizationId=holder.organizationId},owner))
+        local final=Require(OrganizationInterests.List({organizationId=target.organizationId},owner))
+        assert(targetState.revision==4 and targetState.status=='pending' and holderState.revision==4 and holderState.status=='active'
+            and #final.items==1 and final.items[1].interestId==granted.interestId and final.items[1].status=='active'
+            and final.items[1].revision==4,'Final holder/target state inconsistent')
+        local counts=MySQL.single.await([[SELECT
+            (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id IN (?,?)) AS events,
+            (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id IN (?,?)) AS outbox,
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS rejected]],
+            {target.organizationId,holder.organizationId,target.organizationId,holder.organizationId,owner,args[1]..':blocked'})
+        assert(tonumber(counts.events)==8 and tonumber(counts.outbox)==8 and tonumber(counts.rejected)==0,'Holder lifecycle counts inconsistent')
+        print(('[OrganizationsInterestHolderLifecycleTest] PASS target=%s holder=%s targetRevision=4 holderRevision=4 inactiveGrantBlocked=true inactiveReadable=true cleanupAllowed=true resumedGrant=true stableIdentity=true events=8 outbox=8 rolledBack=true firstReplayed=%s'):format(
+            target.organizationId,holder.organizationId,tostring(granted.replayed)))
+    end,debug.traceback)
+    interestLiveRunning=false
+    if not called then print('[OrganizationsInterestHolderLifecycleTest] FAIL '..tostring(reason)) end
+end,true)
+
 RegisterCommand('OrganizationsInterestLifecycleTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLiveRunning then print('[OrganizationsInterestLifecycleTest] FAIL already running');return end
