@@ -361,6 +361,38 @@ mixed-operation races and production authorization tests remain pending.
 
 ## Event publication
 
+`OrganizationsInterestPolicyContractSmokeTest` checks the isolated interest policy
+decision gate (11 checks), with no provider registration/configuration changes or
+database writes. Explicit boolean allow is required; deny, missing/malformed
+decisions, unavailable evaluator and thrown exceptions all fail closed. Request
+attribution is copied and contains no player identity claims. Production interest
+writes use the same gate around Core Authorize when policy is enabled, followed
+by independent creator/privileged ownership checks. This does not establish live
+Core-provider or cross-resource ownership-under-allow acceptance.
+
+`OrganizationsInterestPolicyLiveTest <stable requestId> <character UUID>` is a
+development-only real Core authorization test. Run only on an empty server with
+authorization initially disabled and no installed policy providers; it refuses
+otherwise. It creates one main-owned test organization and uses the existing
+fixture-owned `org_interest_fixture` for foreign ownership rejection. Its temporary
+default provider allows only the exact test action/caller/subject/correlation
+namespace, denying other requests. The harness temporarily enables authorization,
+checks grant allow, revoke deny/malformed/exception/unavailable rejection and
+foreign grant denial despite policy allow, then restores the setting and removes
+the provider on success/failure. Background callers may see temporary denials;
+do not run during other framework tests. Expect revision 2, one active interest
+and two audit/outbox records. Repeat the same request ID and character UUID after
+restart. Controlled exception cases may print expected Core policy error logs.
+No Core or Character code changes are required. This is acceptance-harness
+coverage, not a production policy implementation; production authorization stays
+disabled afterward unless separately configured.
+Live and restart acceptance passed with the same organization UUID, revision 2,
+two audit/outbox records, ownership enforced and cleanup confirmed. The isolated
+decision gate passed 11/11. Since feather-admin installs a default policy provider,
+stop it temporarily on the empty development server for this harness and restore
+it with `ensure feather-admin` afterward. The harness never replaces it. Admin's
+player-role policy is not yet a production policy for Organizations service callers.
+
 `OrganizationsInterestHolderLifecycleTest <stable requestId>` creates a target
 and organization controller, activates the holder and grants a controller interest.
 It suspends the holder, rejects a fresh owner grant, reads and revokes the existing
@@ -381,6 +413,14 @@ ID after restart to verify persisted outcomes and replay, not a fresh race.
 Live and restart acceptance passed for suspension-first: holder revision 3,
 target revision 1, zero interests, four audit/outbox records and no grant receipt.
 The grant-first concurrency branch is supported by the test but not yet accepted.
+
+`OrganizationsHolderGrantOrderingTest <stable requestId>` deterministically commits
+an organization controller grant before suspending its holder. It verifies the
+committed interest remains active/readable, original receipts replay, fresh grants
+reject `holder_inactive`, and rejection creates no receipt. Expect target revision
+2, holder revision 3, one interest and five audit/outbox records. Repeat the original
+request ID after restart. This tests grant-first ordered semantics, not concurrent
+overlap or a scheduler-selected grant-first race winner.
 
 Development-only `OrganizationsInterestLifecycleTest <stable requestId> <character UUID>`
 creates a separate fixed-key organization, grants one owner, starts dissolution,

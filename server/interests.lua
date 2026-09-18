@@ -106,6 +106,15 @@ exports('ListOrganizationInterestTypes',function()
     return result
 end)
 
+function OrganizationInterests.EvaluatePolicy(evaluate,action,context)
+    if not IsCallable(evaluate) then return Err('authorization_denied','Interest policy evaluator unavailable.') end
+    local called,decision=pcall(evaluate,action,Organizations.Copy(context))
+    if not called or type(decision)~='table' or decision.ok~=true
+        or type(decision.value)~='table' or decision.value.allowed~=true then
+        return Err('authorization_denied','Interest policy denied or unavailable.')
+    end
+    return Ok(true)
+end
 function OrganizationInterests.Change(request,resource,operation)
     if Config.Access.trustedMutators[resource or '']~=true then return Err('authorization_denied','Caller is not a trusted interest mutator.') end
     local allowed=Organizations.CheckRead(resource)
@@ -117,11 +126,11 @@ function OrganizationInterests.Change(request,resource,operation)
     request.organizationId=request.organizationId:lower();request.holderId=request.holderId:lower()
     local fingerprint=operation..':'..valid.value
     if Config.Authorization.enabled then
-        local decision=exports['feather-core']:Authorize(Config.Authorization.interestAction,{
-            correlationId=request.requestId,subject={resource=resource,organizationId=request.organizationId,operation='interest_'..operation}})
-        if type(decision)~='table' or not decision.ok or type(decision.value)~='table' or decision.value.allowed~=true then
-            return Err('authorization_denied','Interest policy denied.')
-        end
+        local decision=OrganizationInterests.EvaluatePolicy(function(action,context)
+            return exports['feather-core']:Authorize(action,context)
+        end,Config.Authorization.interestAction,{correlationId=request.requestId,
+            subject={resource=resource,organizationId=request.organizationId,operation='interest_'..operation}})
+        if not decision.ok then return decision end
     end
     local result
     local called,committed=pcall(MySQL.startTransaction,function(query)
@@ -217,6 +226,48 @@ end
 exports('GrantOrganizationInterest',function(request) return InterestBoundary(request,'grant') end)
 exports('RevokeOrganizationInterest',function(request) return InterestBoundary(request,'revoke') end)
 
+RegisterCommand('OrganizationsInterestPolicyContractSmokeTest',function(source)
+    if source~=0 then return end
+    local called,reason=xpcall(function()
+        assert(Organizations.AwaitReady(0).ok,'Service not ready')
+        local tests={}
+        local function Check(label,good) tests[#tests+1]={label,good==true} end
+        local context={correlationId='policy-contract-001',subject={resource=GetCurrentResourceName(),
+            organizationId='00000000-0000-0000-0000-000000000001',operation='interest_grant'}}
+        local function Gate(evaluate) return OrganizationInterests.EvaluatePolicy(evaluate,Config.Authorization.interestAction,context) end
+        local allowed=Gate(function(action,request)
+            Check('action and attribution',action==Config.Authorization.interestAction
+                and request.correlationId==context.correlationId and request.subject.resource==context.subject.resource
+                and request.subject.organizationId==context.subject.organizationId and request.subject.operation=='interest_grant'
+                and request.source==nil and request.subject.characterId==nil)
+            request.subject.resource='tampered'
+            return Ok({allowed=true})
+        end)
+        Check('explicit allow accepted',allowed.ok)
+        Check('context isolated',context.subject.resource==GetCurrentResourceName())
+        for _,case in ipairs({
+            {'explicit deny',function() return Ok({allowed=false}) end},
+            {'unavailable provider',function() return Err('provider_unavailable','Unavailable') end},
+            {'malformed envelope',function() return true end},
+            {'missing allowed',function() return Ok({}) end},
+            {'truthy allowed',function() return Ok({allowed='true'}) end},
+            {'failed envelope allow',function() return {ok=false,value={allowed=true}} end},
+            {'provider exception',function() error('controlled contract exception') end}
+        }) do
+            local denied=Gate(case[2]);Check(case[1]..' rejected',not denied.ok and denied.code=='authorization_denied')
+        end
+        local absent=Gate({})
+        Check('noncallable rejected',not absent.ok and absent.code=='authorization_denied')
+        local passed=0
+        for _,test in ipairs(tests) do
+            if test[2] then passed=passed+1 end
+            print(('[OrganizationsInterestPolicyContractSmokeTest] %-31s %s'):format(test[1],test[2] and 'PASS' or 'FAIL'))
+        end
+        print(('[OrganizationsInterestPolicyContractSmokeTest] done %d/%d passed (isolated decision gate; no providers replaced or writes)'):format(passed,#tests))
+    end,debug.traceback)
+    if not called then print('[OrganizationsInterestPolicyContractSmokeTest] FAIL '..tostring(reason)) end
+end,true)
+
 function OrganizationInterests.ValidateList(request)
     if type(request)~='table' or not Organizations.Uuid(request.organizationId) then return Err('invalid_input','Organization UUID required.') end
     for field in pairs(request) do
@@ -306,6 +357,89 @@ RegisterCommand('OrganizationsInterestReadContractSmokeTest',function(source)
 end,true)
 
 local interestLiveRunning=false
+RegisterCommand('OrganizationsInterestPolicyLiveTest',function(source,args)
+    if source~=0 or not Config.DevMode then return end
+    if interestLiveRunning then print('[OrganizationsInterestPolicyLiveTest] FAIL interest test already running');return end
+    interestLiveRunning=true
+    local previousEnabled=Config.Authorization.enabled
+    local registered=false
+    local providerName='organizations-policy-acceptance'
+    local called,reason=xpcall(function()
+        assert(#args==2 and #args[1]<=100 and Organizations.Uuid(args[2]),'Use <stable requestId> <character UUID>')
+        assert(#GetPlayers()==0,'Run on an empty development server: this temporarily enables authorization')
+        assert(previousEnabled==false,'This acceptance harness requires development authorization initially disabled')
+        assert(Organizations.AwaitReady(0).ok,'Service not ready')
+        local owner=GetCurrentResourceName()
+        assert(Config.Access.privilegedMutators[owner]~=true,'Main resource must not have privileged override for this test')
+        local function Require(result) assert(result.ok,tostring(result.code)..': '..tostring(result.message));return result.value end
+        local providers=Require(exports['feather-core']:GetProviders())
+        for _,provider in ipairs(providers) do assert(provider.kind~='policy','Existing policy provider detected; refusing to alter policy registry') end
+        local foreign=Require(OrganizationIdentity.Find({organizationKey='org_interest_fixture'},owner))
+        local created=Require(OrganizationIdentity.Create({requestId=args[1]..':create',organizationType='business',
+            organizationKey='org_interest_policy_test',legalName='Organization Interest Policy Test Company',
+            displayName='Interest Policy Test',reasonCode='development.interest_policy'},owner))
+        local mode='allow'
+        local seen=0
+        local registration=exports['feather-core']:RegisterPolicyProvider(providerName,{Evaluate=function(action,context)
+            if action~=Config.Authorization.interestAction or context.caller~=owner or context.source~=0 or context.system~=true
+                or context.subject.resource~=owner or context.correlationId:sub(1,#args[1]+1)~=args[1]..':'
+                or (context.subject.organizationId~=created.organizationId and context.subject.organizationId~=foreign.organizationId)
+                or (context.subject.operation~='interest_grant' and context.subject.operation~='interest_revoke') then
+                return Ok({allowed=false})
+            end
+            seen=seen+1
+            if mode=='deny' then return Ok({allowed=false}) end
+            if mode=='malformed' then return true end
+            if mode=='exception' then error('controlled development policy exception') end
+            return Ok({allowed=true})
+        end},{contract=1,default=true,capabilities={actions=1}})
+        Require(registration);registered=true
+        Config.Authorization.enabled=true
+        local request={organizationId=created.organizationId,expectedRevision=1,interestType='owner',holderType='character',
+            holderId=args[2]:lower(),requestId=args[1]..':grant',reasonCode='development.interest_policy'}
+        local granted=Require(OrganizationInterests.Change(request,owner,'grant'))
+        for _,failureMode in ipairs({'deny','malformed','exception'}) do
+            mode=failureMode
+            local blocked=Organizations.Copy(request);blocked.expectedRevision=2;blocked.requestId=args[1]..':'..failureMode
+            local denied=OrganizationInterests.Change(blocked,owner,'revoke')
+            assert(not denied.ok and denied.code=='authorization_denied',failureMode..' policy did not fail closed')
+        end
+        mode='allow'
+        local foreignRequest=Organizations.Copy(request);foreignRequest.organizationId=foreign.organizationId
+        foreignRequest.expectedRevision=foreign.revision;foreignRequest.requestId=args[1]..':foreign'
+        local deniedForeign=OrganizationInterests.Change(foreignRequest,owner,'grant')
+        assert(not deniedForeign.ok and deniedForeign.code=='authorization_denied','Policy allow bypassed creator ownership')
+        assert(seen>=5,'Real Core policy provider did not observe all requests')
+        Require(exports['feather-core']:UnregisterProvider('policy',providerName));registered=false
+        local unavailable=Organizations.Copy(request);unavailable.expectedRevision=2;unavailable.requestId=args[1]..':unavailable'
+        local deniedUnavailable=OrganizationInterests.Change(unavailable,owner,'revoke')
+        assert(not deniedUnavailable.ok and deniedUnavailable.code=='authorization_denied','Unavailable policy did not fail closed')
+        local current=Require(OrganizationIdentity.Get({organizationId=created.organizationId},owner))
+        local afterForeign=Require(OrganizationIdentity.Get({organizationId=foreign.organizationId},owner))
+        local page=Require(OrganizationInterests.List({organizationId=created.organizationId},owner))
+        assert(current.revision==2 and #page.items==1 and page.items[1].status=='active' and page.items[1].interestId==granted.interestId
+            and afterForeign.revision==foreign.revision,'Rejected policy requests changed state')
+        local counts=MySQL.single.await([[SELECT
+            (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id=?) AS events,
+            (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?) AS outbox,
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?,?,?)) AS rejected]],
+            {created.organizationId,created.organizationId,owner,args[1]..':deny',args[1]..':malformed',args[1]..':exception',args[1]..':foreign',args[1]..':unavailable'})
+        assert(tonumber(counts.events)==2 and tonumber(counts.outbox)==2 and tonumber(counts.rejected)==0,'Policy rejection persisted partial records')
+        print(('[OrganizationsInterestPolicyLiveTest] checks passed id=%s revision=2 realCoreProvider=true allow=true deny=true malformed=true exception=true unavailable=true ownershipEnforced=true events=2 outbox=2 firstReplayed=%s'):format(
+            created.organizationId,tostring(granted.replayed)))
+    end,debug.traceback)
+    Config.Authorization.enabled=previousEnabled
+    local cleanup=true
+    if registered then
+        local removed,result=pcall(function() return exports['feather-core']:UnregisterProvider('policy',providerName) end)
+        cleanup=removed and type(result)=='table' and result.ok==true
+    end
+    interestLiveRunning=false
+    if not called then print('[OrganizationsInterestPolicyLiveTest] FAIL '..tostring(reason)) end
+    if not cleanup then print('[OrganizationsInterestPolicyLiveTest] FAIL provider cleanup failed; restart feather-organizations before continuing')
+    elseif called then print('[OrganizationsInterestPolicyLiveTest] PASS authorizationRestored=true temporaryProviderRemoved=true') end
+end,true)
+
 RegisterCommand('OrganizationsInterestHolderLifecycleTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLiveRunning then print('[OrganizationsInterestHolderLifecycleTest] FAIL already running');return end

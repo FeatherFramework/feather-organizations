@@ -292,6 +292,58 @@ RegisterCommand('OrganizationsInterestLifecycleConcurrencyTest',function(source,
     end)
 end,true)
 local holderRaceRunning=false
+RegisterCommand('OrganizationsHolderGrantOrderingTest',function(source,args)
+    if source~=0 or not Config.DevMode then return end
+    if holderRaceRunning then print('[OrganizationsHolderGrantOrderingTest] FAIL holder test already running');return end
+    holderRaceRunning=true
+    local called,reason=xpcall(function()
+        assert(#args==1 and #args[1]<=100,'Use <stable requestId>')
+        assert(Organizations.AwaitReady(0).ok,'Service not ready')
+        local owner=GetCurrentResourceName()
+        local function Require(result) assert(result.ok,tostring(result.code)..': '..tostring(result.message));return result.value end
+        local function Create(suffix)
+            return Require(OrganizationIdentity.Create({requestId=args[1]..':create_'..suffix,organizationType='business',
+                organizationKey='org_holder_grant_order_'..suffix,legalName='Organization Holder Grant Ordering '..suffix,
+                displayName='Holder Grant Ordering '..suffix,reasonCode='development.holder_grant_order'},owner))
+        end
+        local target,holder=Create('target'),Create('holder')
+        Require(OrganizationLifecycle.Change({organizationId=holder.organizationId,expectedRevision=1,status='active',
+            requestId=args[1]..':activate',reasonCode='development.holder_grant_order'},owner))
+        local grant={organizationId=target.organizationId,expectedRevision=1,interestType='controlling_organization',
+            holderType='organization',holderId=holder.organizationId,requestId=args[1]..':grant',reasonCode='development.holder_grant_order'}
+        -- Intentional ordering, not a probabilistic race or production fault hook:
+        -- suspension is issued only after the grant transaction has committed.
+        local granted=Require(OrganizationInterests.Change(grant,owner,'grant'))
+        local suspend={organizationId=holder.organizationId,expectedRevision=2,status='suspended',
+            requestId=args[1]..':suspend',reasonCode='development.holder_grant_order'}
+        Require(OrganizationLifecycle.Change(suspend,owner))
+        local replay=Require(OrganizationInterests.Change(grant,owner,'grant'))
+        local suspendReplay=Require(OrganizationLifecycle.Change(suspend,owner))
+        assert(replay.replayed and replay.interestId==granted.interestId and replay.revision==2
+            and suspendReplay.replayed and suspendReplay.revision==3,'Committed receipts did not replay')
+        local fresh=Organizations.Copy(grant);fresh.expectedRevision=2;fresh.interestType='owner';fresh.requestId=args[1]..':blocked'
+        local denied=OrganizationInterests.Change(fresh,owner,'grant')
+        assert(not denied.ok and denied.code=='holder_inactive','Fresh grant accepted after suspension')
+        local targetState=Require(OrganizationIdentity.Get({organizationId=target.organizationId},owner))
+        local holderState=Require(OrganizationIdentity.Get({organizationId=holder.organizationId},owner))
+        local page=Require(OrganizationInterests.List({organizationId=target.organizationId,status='active'},owner))
+        assert(targetState.status=='pending' and targetState.revision==2 and holderState.status=='suspended' and holderState.revision==3
+            and #page.items==1 and page.items[1].interestId==granted.interestId
+            and page.items[1].holderId==holder.organizationId and page.items[1].revision==2,'Grant-first state inconsistent')
+        local counts=MySQL.single.await([[SELECT
+            (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id IN (?,?)) AS events,
+            (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id IN (?,?)) AS outbox,
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS grants,
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS rejected]],
+            {target.organizationId,holder.organizationId,target.organizationId,holder.organizationId,owner,grant.requestId,owner,fresh.requestId})
+        assert(tonumber(counts.events)==5 and tonumber(counts.outbox)==5 and tonumber(counts.grants)==1 and tonumber(counts.rejected)==0,'Grant-first record counts inconsistent')
+        print(('[OrganizationsHolderGrantOrderingTest] PASS target=%s holder=%s ordering=grant_then_suspend holderRevision=3 targetRevision=2 interests=1 events=5 outbox=5 originalReceipt=true freshGrantBlocked=true noImplicitRevocation=true firstReplayed=%s'):format(
+            target.organizationId,holder.organizationId,tostring(granted.replayed)))
+    end,debug.traceback)
+    holderRaceRunning=false
+    if not called then print('[OrganizationsHolderGrantOrderingTest] FAIL '..tostring(reason)) end
+end,true)
+
 RegisterCommand('OrganizationsHolderGrantConcurrencyTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if holderRaceRunning then print('[OrganizationsHolderGrantConcurrencyTest] FAIL already running');return end
