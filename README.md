@@ -276,6 +276,26 @@ Lua function-only checks when provider tables are introduced.
 
 ## Controlling-interest preparation
 
+Authorization is now enabled by default. Admin's server-only service policy
+explicitly grants Organizations-broker calls on behalf of Organizations or Admin
+the six configured organization actions. The actual Core caller must match the
+configured broker; subject.resource alone cannot grant authority. Player calls
+remain on Admin's existing role path. Fixture/service consumers need their own
+explicit policy grants as well as Organizations trust/ownership. No fixture policy
+grant is installed by default. Missing Admin/provider fails closed for mutations;
+readiness does not itself guarantee policy availability. Start Admin before making
+organization changes, and do not use the authorization-disabled policy harness
+under this default production configuration.
+
+`OrganizationsServicePolicyLiveTest <stable requestId> <character UUID>` verifies
+real creation and character-owner grant/revoke through Admin's installed service
+policy with authorization enabled. No provider/configuration changes occur.
+Expect revision 3, one revoked interest, three audit/outbox records and two
+interest receipts. Repeat the exact IDs after restart for original receipt replay.
+Live and restart acceptance passed with authorization enabled and the installed
+Admin provider unchanged. The optional fixture's unauthorized-principal test also
+passed before/after restart, denying owned mutations/creation/retries/spoofing.
+
 `ListOrganizationInterestTypes()` provides an isolated trusted-reader catalog:
 character founders, character/organization owners, and organization controllers.
 These are control facts, not employment or access grants. Shares and percentages

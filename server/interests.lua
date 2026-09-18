@@ -357,6 +357,48 @@ RegisterCommand('OrganizationsInterestReadContractSmokeTest',function(source)
 end,true)
 
 local interestLiveRunning=false
+RegisterCommand('OrganizationsServicePolicyLiveTest',function(source,args)
+    if source~=0 or not Config.DevMode then return end
+    if interestLiveRunning then print('[OrganizationsServicePolicyLiveTest] FAIL already running');return end
+    interestLiveRunning=true
+    local called,reason=xpcall(function()
+        assert(#args==2 and #args[1]<=100 and Organizations.Uuid(args[2]),'Use <stable requestId> <character UUID>')
+        assert(Organizations.AwaitReady(0).ok and Config.Authorization.enabled==true,'Ready Organizations with authorization enabled required')
+        local owner=GetCurrentResourceName()
+        local function Require(result) assert(result.ok,tostring(result.code)..': '..tostring(result.message));return result.value end
+        local provider=Require(exports['feather-core']:GetProvider('policy',nil,1)).provider
+        assert(provider.owner=='feather-admin' and provider.capabilities.servicePrincipals==1,'Installed Admin service policy required')
+        local created=Require(OrganizationIdentity.Create({requestId=args[1]..':create',organizationType='business',
+            organizationKey='org_service_policy_test',legalName='Organization Service Policy Test Company',
+            displayName='Service Policy Test',reasonCode='development.service_policy'},owner))
+        local grant={organizationId=created.organizationId,expectedRevision=1,interestType='owner',holderType='character',
+            holderId=args[2]:lower(),requestId=args[1]..':grant',reasonCode='development.service_policy'}
+        local granted=Require(OrganizationInterests.Change(grant,owner,'grant'))
+        local revoke=Organizations.Copy(grant);revoke.expectedRevision=2;revoke.requestId=args[1]..':revoke'
+        local revoked=Require(OrganizationInterests.Change(revoke,owner,'revoke'))
+        local replay=Require(OrganizationInterests.Change(grant,owner,'grant'))
+        local revokeReplay=Require(OrganizationInterests.Change(revoke,owner,'revoke'))
+        assert(granted.interestId==revoked.interestId and replay.interestId==granted.interestId
+            and replay.replayed and replay.revision==2 and revokeReplay.replayed and revokeReplay.status=='revoked','Stable receipts failed')
+        local current=Require(OrganizationIdentity.Get({organizationId=created.organizationId},owner))
+        local page=Require(OrganizationInterests.List({organizationId=created.organizationId},owner))
+        assert(current.revision==3 and #page.items==1 and page.items[1].interestId==granted.interestId
+            and page.items[1].status=='revoked' and page.items[1].revision==3,'Service mutation state inconsistent')
+        local counts=MySQL.single.await([[SELECT
+            (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id=?) AS events,
+            (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?) AS outbox,
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?)) AS receipts]],
+            {created.organizationId,created.organizationId,owner,grant.requestId,revoke.requestId})
+        assert(tonumber(counts.events)==3 and tonumber(counts.outbox)==3 and tonumber(counts.receipts)==2,'Service mutation counts inconsistent')
+        local after=Require(exports['feather-core']:GetProvider('policy',nil,1)).provider
+        assert(Config.Authorization.enabled==true and after.name==provider.name and after.owner==provider.owner,'Production policy configuration changed')
+        print(('[OrganizationsServicePolicyLiveTest] PASS id=%s interestId=%s provider=feather-admin authorizationEnabled=true revision=3 state=revoked events=3 outbox=3 receipts=2 originalReceipts=true policyUnchanged=true firstReplayed=%s'):format(
+            created.organizationId,granted.interestId,tostring(granted.replayed)))
+    end,debug.traceback)
+    interestLiveRunning=false
+    if not called then print('[OrganizationsServicePolicyLiveTest] FAIL '..tostring(reason)) end
+end,true)
+
 RegisterCommand('OrganizationsInterestPolicyLiveTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLiveRunning then print('[OrganizationsInterestPolicyLiveTest] FAIL interest test already running');return end

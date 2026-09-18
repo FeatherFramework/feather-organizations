@@ -4,7 +4,7 @@ Config = {
     ReadinessTimeoutMs = 30000,
     DevMode = true,
     Outbox = { pollIntervalMs = 1000, retryDelaySeconds = 5, batchSize = 20 },
-    Authorization = { enabled = false, createAction = 'organizations.organization.create',
+    Authorization = { enabled = true, createAction = 'organizations.organization.create',
         updateAction = 'organizations.organization.update',
         suspendAction = 'organizations.organization.suspend',
         dissolveAction = 'organizations.organization.dissolve',
