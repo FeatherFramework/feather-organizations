@@ -10,10 +10,10 @@ Config = {
         dissolveAction = 'organizations.organization.dissolve',
         hierarchyAction = 'organizations.relationship.manage', interestAction = 'organizations.interest.manage' },
     Access = {
-        trustedCreators = { ['feather-organizations'] = true, ['feather-admin'] = true },
-        trustedMutators = { ['feather-organizations'] = true, ['feather-admin'] = true },
+        trustedCreators = { ['feather-organizations'] = true, ['feather-admin'] = true, ['feather-shops'] = true },
+        trustedMutators = { ['feather-organizations'] = true, ['feather-admin'] = true, ['feather-shops'] = true },
         privilegedMutators = { ['feather-admin'] = true },
-        trustedAuditors = { ['feather-organizations'] = true, ['feather-admin'] = true },
+        trustedAuditors = { ['feather-organizations'] = true, ['feather-admin'] = true, ['feather-shops'] = true },
         privilegedAuditors = { ['feather-admin'] = true },
         trustedReaders = {
             ['feather-organizations'] = true,
