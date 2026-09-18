@@ -404,14 +404,15 @@ do not run during other framework tests. Expect revision 2, one active interest
 and two audit/outbox records. Repeat the same request ID and character UUID after
 restart. Controlled exception cases may print expected Core policy error logs.
 No Core or Character code changes are required. This is acceptance-harness
-coverage, not a production policy implementation; production authorization stays
-disabled afterward unless separately configured.
+coverage of the temporary provider, not the current production configuration.
+Authorization is now enabled by default with Admin's explicit service-principal
+grants; this older harness requires its documented isolated test configuration.
 Live and restart acceptance passed with the same organization UUID, revision 2,
 two audit/outbox records, ownership enforced and cleanup confirmed. The isolated
 decision gate passed 11/11. Since feather-admin installs a default policy provider,
 stop it temporarily on the empty development server for this harness and restore
 it with `ensure feather-admin` afterward. The harness never replaces it. Admin's
-player-role policy is not yet a production policy for Organizations service callers.
+player-role policy is separate from its now-installed service-principal grants.
 
 `OrganizationsInterestHolderLifecycleTest <stable requestId>` creates a target
 and organization controller, activates the holder and grants a controller interest.
