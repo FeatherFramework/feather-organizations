@@ -42,7 +42,7 @@ AddEventHandler('onResourceStop', function(resource)
     end
 end)
 
-RegisterCommand('OrganizationsFoundationSmokeTest', function(source)
+Organizations.RegisterDevCommand('OrganizationsFoundationSmokeTest', function(source)
     if source ~= 0 then return end
     local called, reason = xpcall(function()
         local owner = GetCurrentResourceName()
@@ -87,3 +87,49 @@ RegisterCommand('OrganizationsFoundationSmokeTest', function(source)
     end, debug.traceback)
     if not called then print('[OrganizationsFoundationSmokeTest] FAIL ' .. tostring(reason)) end
 end, true)
+
+RegisterCommand('OrganizationsReleaseContractSmokeTest',function(source)
+    if source~=0 then return end
+    local registered,callable={},type(GetRegisteredCommands)=='function'
+    if callable then
+        for _,command in ipairs(GetRegisteredCommands() or {}) do
+            local name=type(command)=='table' and command.name or nil
+            if type(name)=='string' then registered[name]=true end
+        end
+    end
+    local developmentAbsent=callable
+    if callable then
+        for name in pairs(registered) do
+            if name~='OrganizationsReleaseContractSmokeTest' and name:sub(1,13)=='Organizations' then
+                developmentAbsent=false;break
+            end
+        end
+    end
+    local health=Organizations.GetHealth()
+    local capabilities=Organizations.GetCapabilities()
+    local events=OrganizationEvents.State()
+    local business=OrganizationIdentity.Find({organizationKey='valentine_general_store'},GetCurrentResourceName())
+    local fixture='feather-organizations-tests'
+    local fixtureAbsent=Config.Access.trustedReaders[fixture]~=true
+        and Config.Access.trustedCreators[fixture]~=true
+        and Config.Access.trustedMutators[fixture]~=true
+        and Config.Access.trustedAuditors[fixture]~=true
+    local tests={
+        {'service ready',health.ok and health.value.state=='ready'},
+        {'server development disabled',Config.DevMode==false},
+        {'authorization enabled',Config.Authorization.enabled==true},
+        {'development commands absent',developmentAbsent},
+        {'fixture trust absent',fixtureAbsent},
+        {'publisher running',events.ok and events.value.running==true},
+        {'canonical business active',business.ok and business.value.status=='active'
+            and business.value.organizationType=='business'},
+        {'contract capabilities',capabilities.ok and capabilities.value.contract==1
+            and capabilities.value.features.controllingInterests==1}
+    }
+    local passed=0
+    for _,test in ipairs(tests) do
+        if test[2] then passed=passed+1 end
+        print(('[OrganizationsReleaseContractSmokeTest] %-29s %s'):format(test[1],test[2] and 'PASS' or 'FAIL'))
+    end
+    print(('[OrganizationsReleaseContractSmokeTest] done %d/%d passed (read-only)'):format(passed,#tests))
+end,true)

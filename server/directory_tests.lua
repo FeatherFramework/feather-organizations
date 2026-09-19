@@ -10,7 +10,7 @@ local function Report(name,tests,note)
     end
     print(('[%s] done %d/%d passed (%s)'):format(name,passed,#tests,note))
 end
-RegisterCommand('OrganizationsDirectoryContractSmokeTest',function(source)
+Organizations.RegisterDevCommand('OrganizationsDirectoryContractSmokeTest',function(source)
     if source~=0 then return end
     Run('OrganizationsDirectoryContractSmokeTest',function()
         local owner=GetCurrentResourceName()
@@ -48,7 +48,7 @@ RegisterCommand('OrganizationsDirectoryContractSmokeTest',function(source)
     end)
 end,true)
 
-RegisterCommand('OrganizationsIdentityContractSmokeTest',function(source)
+Organizations.RegisterDevCommand('OrganizationsIdentityContractSmokeTest',function(source)
     if source~=0 then return end
     Run('OrganizationsIdentityContractSmokeTest',function()
         if not Organizations.AwaitReady(0).ok then print('[OrganizationsIdentityContractSmokeTest] FAIL not ready');return end
@@ -74,7 +74,7 @@ RegisterCommand('OrganizationsIdentityContractSmokeTest',function(source)
     end)
 end,true)
 
-RegisterCommand('OrganizationsIdentityLiveTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsIdentityLiveTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     Run('OrganizationsIdentityLiveTest',function()
         local base=args[1]

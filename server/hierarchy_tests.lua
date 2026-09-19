@@ -3,7 +3,7 @@ local function Run(name,callback)
     if not called then print((' [%s] FAIL %s'):format(name,tostring(result))) end
 end
 local function Id(number) return ('00000000-0000-4000-8000-%012x'):format(number) end
-RegisterCommand('OrganizationsHierarchyContractSmokeTest',function(source)
+Organizations.RegisterDevCommand('OrganizationsHierarchyContractSmokeTest',function(source)
     if source~=0 then return end
     Run('OrganizationsHierarchyContractSmokeTest',function()
         if not Organizations.AwaitReady(0).ok then print('[OrganizationsHierarchyContractSmokeTest] FAIL not ready');return end
@@ -44,7 +44,7 @@ RegisterCommand('OrganizationsHierarchyContractSmokeTest',function(source)
 end,true)
 
 local concurrencyRunning=false
-RegisterCommand('OrganizationsHierarchyConcurrencyTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsHierarchyConcurrencyTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if concurrencyRunning then print('[OrganizationsHierarchyConcurrencyTest] FAIL already running');return end
     local base=args[1]
@@ -112,7 +112,7 @@ RegisterCommand('OrganizationsHierarchyConcurrencyTest',function(source,args)
     end)
 end,true)
 
-RegisterCommand('OrganizationsHierarchyLiveTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsHierarchyLiveTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     Run('OrganizationsHierarchyLiveTest',function()
         local base=args[1]

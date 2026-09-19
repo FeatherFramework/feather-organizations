@@ -2,7 +2,7 @@ local function Run(name, callback)
     local called, result = xpcall(callback, debug.traceback)
     if not called then print((' [%s] FAIL %s'):format(name, tostring(result))) end
 end
-RegisterCommand('OrganizationsLifecycleContractSmokeTest', function(source)
+Organizations.RegisterDevCommand('OrganizationsLifecycleContractSmokeTest', function(source)
     if source ~= 0 then return end
     Run('OrganizationsLifecycleContractSmokeTest', function()
         if not Organizations.AwaitReady(0).ok then print('[OrganizationsLifecycleContractSmokeTest] FAIL not ready'); return end
@@ -37,7 +37,7 @@ RegisterCommand('OrganizationsLifecycleContractSmokeTest', function(source)
     end)
 end,true)
 
-RegisterCommand('OrganizationsLifecycleLiveTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsLifecycleLiveTest',function(source,args)
     if source ~= 0 or not Config.DevMode then return end
     Run('OrganizationsLifecycleLiveTest',function()
         local base = args[1]

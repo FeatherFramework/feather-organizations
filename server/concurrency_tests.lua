@@ -1,5 +1,5 @@
 local running = false
-RegisterCommand('OrganizationsConcurrencyTest', function(source,args)
+Organizations.RegisterDevCommand('OrganizationsConcurrencyTest', function(source,args)
     if source ~= 0 or not Config.DevMode then return end
     if running then print('[OrganizationsConcurrencyTest] FAIL test already running'); return end
     local base = args[1]
@@ -64,7 +64,7 @@ RegisterCommand('OrganizationsConcurrencyTest', function(source,args)
 end,true)
 
 local identityRunning=false
-RegisterCommand('OrganizationsIdentityLifecycleConcurrencyTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsIdentityLifecycleConcurrencyTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if identityRunning then print('[OrganizationsIdentityLifecycleConcurrencyTest] FAIL already running');return end
     local base=args[1]
@@ -142,7 +142,7 @@ RegisterCommand('OrganizationsIdentityLifecycleConcurrencyTest',function(source,
     end)
 end,true)
 local interestRunning=false
-RegisterCommand('OrganizationsInterestConcurrencyTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsInterestConcurrencyTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestRunning then print('[OrganizationsInterestConcurrencyTest] FAIL already running');return end
     if #args~=2 or #args[1]>100 or not args[1]:match('^[A-Za-z0-9][A-Za-z0-9._:%-]*$') or not Organizations.Uuid(args[2]) then
@@ -218,7 +218,7 @@ RegisterCommand('OrganizationsInterestConcurrencyTest',function(source,args)
     end)
 end,true)
 local interestLifecycleRunning=false
-RegisterCommand('OrganizationsInterestLifecycleConcurrencyTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsInterestLifecycleConcurrencyTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLifecycleRunning then print('[OrganizationsInterestLifecycleConcurrencyTest] FAIL already running');return end
     if #args~=2 or #args[1]>100 or not args[1]:match('^[A-Za-z0-9][A-Za-z0-9._:%-]*$') or not Organizations.Uuid(args[2]) then
@@ -292,7 +292,7 @@ RegisterCommand('OrganizationsInterestLifecycleConcurrencyTest',function(source,
     end)
 end,true)
 local holderRaceRunning=false
-RegisterCommand('OrganizationsHolderGrantOrderingTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsHolderGrantOrderingTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if holderRaceRunning then print('[OrganizationsHolderGrantOrderingTest] FAIL holder test already running');return end
     holderRaceRunning=true
@@ -344,7 +344,7 @@ RegisterCommand('OrganizationsHolderGrantOrderingTest',function(source,args)
     if not called then print('[OrganizationsHolderGrantOrderingTest] FAIL '..tostring(reason)) end
 end,true)
 
-RegisterCommand('OrganizationsHolderGrantConcurrencyTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsHolderGrantConcurrencyTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if holderRaceRunning then print('[OrganizationsHolderGrantConcurrencyTest] FAIL already running');return end
     if #args~=1 or #args[1]>100 or not args[1]:match('^[A-Za-z0-9][A-Za-z0-9._:%-]*$') then

@@ -1,4 +1,4 @@
-RegisterCommand('OrganizationsEventContractSmokeTest',function(source)
+Organizations.RegisterDevCommand('OrganizationsEventContractSmokeTest',function(source)
     if source~=0 then return end
     local called,reason=xpcall(function()
         if not Organizations.AwaitReady(0).ok then print('[OrganizationsEventContractSmokeTest] FAIL service not ready');return end
@@ -33,7 +33,7 @@ RegisterCommand('OrganizationsEventContractSmokeTest',function(source)
 end,true)
 
 local eventLiveRunning=false
-RegisterCommand('OrganizationsEventRecoveryTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsEventRecoveryTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if eventLiveRunning then print('[OrganizationsEventRecoveryTest] FAIL another event test is running');return end
     eventLiveRunning=true
@@ -87,7 +87,7 @@ RegisterCommand('OrganizationsEventRecoveryTest',function(source,args)
     if not called then print('[OrganizationsEventRecoveryTest] FAIL '..tostring(reason)..'; restart feather-organizations if prepare paused publication') end
 end,true)
 
-RegisterCommand('OrganizationsEventLiveTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsEventLiveTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if eventLiveRunning then print('[OrganizationsEventLiveTest] FAIL test already running');return end
     eventLiveRunning=true
