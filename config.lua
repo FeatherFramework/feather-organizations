@@ -2,7 +2,7 @@ Config = {
     Contract = 1,
     RequiredCoreContract = 1,
     ReadinessTimeoutMs = 30000,
-    DevMode = true,
+    DevMode = false,
     Outbox = { pollIntervalMs = 1000, retryDelaySeconds = 5, batchSize = 20 },
     Authorization = { enabled = true, createAction = 'organizations.organization.create',
         updateAction = 'organizations.organization.update',

@@ -6,7 +6,7 @@ lua54 'yes'
 name 'feather-organizations'
 author 'Feather Framework'
 description 'Durable organization identity for the Feather Framework'
-version '0.1.1'
+version '0.1.2'
 
 server_scripts {
     '@oxmysql/lib/MySQL.lua',

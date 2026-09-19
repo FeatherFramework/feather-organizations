@@ -226,7 +226,7 @@ end
 exports('GrantOrganizationInterest',function(request) return InterestBoundary(request,'grant') end)
 exports('RevokeOrganizationInterest',function(request) return InterestBoundary(request,'revoke') end)
 
-RegisterCommand('OrganizationsInterestPolicyContractSmokeTest',function(source)
+Organizations.RegisterDevCommand('OrganizationsInterestPolicyContractSmokeTest',function(source)
     if source~=0 then return end
     local called,reason=xpcall(function()
         assert(Organizations.AwaitReady(0).ok,'Service not ready')
@@ -326,7 +326,7 @@ exports('ListOrganizationInterests',function(request)
     return result
 end)
 
-RegisterCommand('OrganizationsInterestReadContractSmokeTest',function(source)
+Organizations.RegisterDevCommand('OrganizationsInterestReadContractSmokeTest',function(source)
     if source~=0 then return end
     local called,reason=xpcall(function()
         assert(Organizations.AwaitReady(0).ok,'Service not ready')
@@ -357,7 +357,7 @@ RegisterCommand('OrganizationsInterestReadContractSmokeTest',function(source)
 end,true)
 
 local interestLiveRunning=false
-RegisterCommand('OrganizationsServicePolicyLiveTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsServicePolicyLiveTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLiveRunning then print('[OrganizationsServicePolicyLiveTest] FAIL already running');return end
     interestLiveRunning=true
@@ -399,7 +399,7 @@ RegisterCommand('OrganizationsServicePolicyLiveTest',function(source,args)
     if not called then print('[OrganizationsServicePolicyLiveTest] FAIL '..tostring(reason)) end
 end,true)
 
-RegisterCommand('OrganizationsInterestPolicyLiveTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsInterestPolicyLiveTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLiveRunning then print('[OrganizationsInterestPolicyLiveTest] FAIL interest test already running');return end
     interestLiveRunning=true
@@ -482,7 +482,7 @@ RegisterCommand('OrganizationsInterestPolicyLiveTest',function(source,args)
     elseif called then print('[OrganizationsInterestPolicyLiveTest] PASS authorizationRestored=true temporaryProviderRemoved=true') end
 end,true)
 
-RegisterCommand('OrganizationsInterestHolderLifecycleTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsInterestHolderLifecycleTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLiveRunning then print('[OrganizationsInterestHolderLifecycleTest] FAIL already running');return end
     interestLiveRunning=true
@@ -543,7 +543,7 @@ RegisterCommand('OrganizationsInterestHolderLifecycleTest',function(source,args)
     if not called then print('[OrganizationsInterestHolderLifecycleTest] FAIL '..tostring(reason)) end
 end,true)
 
-RegisterCommand('OrganizationsInterestLifecycleTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsInterestLifecycleTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLiveRunning then print('[OrganizationsInterestLifecycleTest] FAIL already running');return end
     interestLiveRunning=true
@@ -600,7 +600,7 @@ RegisterCommand('OrganizationsInterestLifecycleTest',function(source,args)
     if not called then print('[OrganizationsInterestLifecycleTest] FAIL '..tostring(reason)) end
 end,true)
 
-RegisterCommand('OrganizationsInterestReadLiveTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsInterestReadLiveTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLiveRunning then print('[OrganizationsInterestReadLiveTest] FAIL test already running');return end
     interestLiveRunning=true
@@ -679,7 +679,7 @@ RegisterCommand('OrganizationsInterestReadLiveTest',function(source,args)
     if not called then print('[OrganizationsInterestReadLiveTest] FAIL '..tostring(reason)) end
 end,true)
 
-RegisterCommand('OrganizationsInterestLiveTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsInterestLiveTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if interestLiveRunning then print('[OrganizationsInterestLiveTest] FAIL test already running');return end
     interestLiveRunning=true
@@ -748,7 +748,7 @@ RegisterCommand('OrganizationsInterestLiveTest',function(source,args)
     if not called then print('[OrganizationsInterestLiveTest] FAIL '..tostring(reason)) end
 end,true)
 
-RegisterCommand('OrganizationsInterestContractSmokeTest',function(source)
+Organizations.RegisterDevCommand('OrganizationsInterestContractSmokeTest',function(source)
     if source~=0 then return end
     local called,reason=xpcall(function()
         assert(Organizations.AwaitReady(0).ok,'Service not ready')
@@ -793,7 +793,7 @@ RegisterCommand('OrganizationsInterestContractSmokeTest',function(source)
     if not called then print('[OrganizationsInterestContractSmokeTest] FAIL '..tostring(reason)) end
 end,true)
 
-RegisterCommand('OrganizationsHolderContractSmokeTest',function(source)
+Organizations.RegisterDevCommand('OrganizationsHolderContractSmokeTest',function(source)
     if source~=0 then return end
     local called,reason=xpcall(function()
         assert(Organizations.AwaitReady(0).ok,'Service not ready')
@@ -824,7 +824,7 @@ RegisterCommand('OrganizationsHolderContractSmokeTest',function(source)
     if not called then print('[OrganizationsHolderContractSmokeTest] FAIL '..tostring(reason)) end
 end,true)
 
-RegisterCommand('OrganizationsHolderLiveTest',function(source,args)
+Organizations.RegisterDevCommand('OrganizationsHolderLiveTest',function(source,args)
     if source~=0 or not Config.DevMode then return end
     local called,reason=xpcall(function()
         assert(#args==2,'Use character|organization <holder UUID>; no player source required')

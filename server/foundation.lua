@@ -1,6 +1,10 @@
 Organizations = {}
 local health = { state = 'starting', phase = 'not_started', contract = 1 }
 
+function Organizations.RegisterDevCommand(name,handler,restricted)
+    if Config.DevMode then RegisterCommand(name,handler,restricted==true) end
+end
+
 function Organizations.Copy(value)
     if type(value) ~= 'table' then return value end
     local result = {}

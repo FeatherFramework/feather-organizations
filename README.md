@@ -3,6 +3,13 @@
 Authoritative organization identity domain, independent of Society, Jobs, money,
 permissions, or shop presentation. Native Feather; no legacy compatibility layer.
 
+Shipped defaults use `Config.DevMode=false` with service-policy authorization
+enabled. Acceptance fixtures receive no trust and development commands are not
+registered. The permanent server-console `OrganizationsReleaseContractSmokeTest`
+is read-only and checks readiness, policy mode, fixture exclusion, publisher state,
+capabilities, and the canonical Valentine business. Enable DevMode only on an
+isolated development server; disable it and restart before packaging.
+
 ## First slice
 
 Contract 1 flat results, bounded readiness, defensive trusted type reads, and
