@@ -110,11 +110,10 @@ Organizations.RegisterDevCommand('OrganizationsIdentityLiveTest',function(source
         terminalEdit.requestId=base .. ':terminal'
         local blocked=OrganizationDirectory.Update(terminalEdit,owner)
         local current=OrganizationIdentity.Get({organizationId=request.organizationId},owner)
-        local counts=MySQL.single.await([[SELECT
+        local counts=DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organization_events` WHERE `organization_id`=?) AS events,
             (SELECT COUNT(*) FROM `feather_organization_identity_receipts`
-                WHERE `source_resource`=? AND `request_id` IN (?,?,?)) AS rejected_receipts]],
-            {request.organizationId,owner,base .. ':stale',base .. ':noop',base .. ':terminal'})
+                WHERE `source_resource`=? AND `request_id` IN (?,?,?)) AS rejected_receipts]], request.organizationId,owner,base .. ':stale',base .. ':noop',base .. ':terminal')
         local good=not mismatch.ok and mismatch.code=='idempotency_conflict'
             and not rejected.ok and rejected.code=='revision_conflict'
             and replay.ok and replay.value.replayed==true and replay.value.revision==2

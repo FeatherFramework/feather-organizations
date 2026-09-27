@@ -249,7 +249,7 @@ optional fixture after testing and disable DevMode before production.
 
 ## Installation and first acceptance
 
-Place in `resources/[feather]/feather-organizations`. Start oxmysql and Core first.
+Place in `resources/[feather]/feather-organizations`. Start feather-mysql and feather-core first.
 No Economy or Character dependency; do not change their activation for this slice.
 Run in the server console:
 
@@ -504,3 +504,20 @@ restart after prepare, including on failure: it pauses the whole publisher.
 The fixed test key requires retaining the original request ID on every rerun.
 Pending publication recovery passed across resource restart: the original event
 ID was published, creation replayed, and exactly one audit/outbox record remained.
+
+## Database access
+
+The manifest imports `@feather-mysql/lib/DB.lua`. Queries use `DB.query`,
+`DB.one`, `DB.value`, `DB.insert` and `DB.exec`, with positional values after
+SQL. The library yields, returns plain values and raises database failures into
+Organizations' existing error boundaries.
+
+Creation, lifecycle, identity, hierarchy and interest changes use
+`DB.transaction(function(tx) ... end)`. Every transactional statement uses
+`tx.*`, including receipts, events and outbox rows. Only a confirmed commit
+returns domain success. Retry uncertain outcomes with the same request ID.
+
+Start `feather-mysql`, `feather-core`, then `feather-organizations`. Startup waits
+for `DB.awaitReady` before applying migrations. Restart Organizations after
+restarting the database provider. Run `OrganizationsReleaseContractSmokeTest` on
+staging; development smoke commands require `Config.DevMode`.

@@ -52,20 +52,20 @@ function OrganizationLifecycle.Change(request, resource)
     local current = Organizations.CheckRead(resource)
     if not current.ok then return current end
     local result
-    local called, committed = pcall(MySQL.startTransaction, function(query)
+    local called, committed = pcall(DB.transaction, function(tx)
         local executed, outcome = xpcall(function()
-            query([[INSERT IGNORE INTO `feather_organization_lifecycle_receipts`
-                (`source_resource`,`request_id`,`request_fingerprint`) VALUES (?,?,?)]], { resource, request.requestId, valid.value })
-            local receipts = query([[SELECT `request_fingerprint`,`result_json`
+            tx.exec([[INSERT IGNORE INTO `feather_organization_lifecycle_receipts`
+                (`source_resource`,`request_id`,`request_fingerprint`) VALUES (?,?,?)]], resource, request.requestId, valid.value)
+            local receipts = tx.query([[SELECT `request_fingerprint`,`result_json`
                 FROM `feather_organization_lifecycle_receipts`
-                WHERE `source_resource`=? AND `request_id`=? FOR UPDATE]], { resource, request.requestId }) or {}
+                WHERE `source_resource`=? AND `request_id`=? FOR UPDATE]], resource, request.requestId) or {}
             local receipt = receipts[1]
             if not receipt then return Err('internal_error', 'Could not reserve lifecycle receipt.') end
             if receipt.request_fingerprint ~= valid.value then
                 return Err('idempotency_conflict', 'Lifecycle request ID is bound to another payload.')
             end
-            local rows = query([[SELECT `organization_id`,`status`,`revision`,`created_by_resource`
-                FROM `feather_organizations` WHERE `organization_id`=? FOR UPDATE]], { request.organizationId }) or {}
+            local rows = tx.query([[SELECT `organization_id`,`status`,`revision`,`created_by_resource`
+                FROM `feather_organizations` WHERE `organization_id`=? FOR UPDATE]], request.organizationId) or {}
             local organization = rows[1]
             if not organization then return Err('organization_not_found', 'Organization not found.') end
             if organization.created_by_resource ~= resource and Config.Access.privilegedMutators[resource] ~= true then
@@ -81,8 +81,8 @@ function OrganizationLifecycle.Change(request, resource)
                 value.replayed = true
                 return Ok(value)
             end
-            local events = query([[SELECT `event_id` FROM `feather_organization_events`
-                WHERE `source_resource`=? AND `request_id`=?]], { resource, request.requestId }) or {}
+            local events = tx.query([[SELECT `event_id` FROM `feather_organization_events`
+                WHERE `source_resource`=? AND `request_id`=?]], resource, request.requestId) or {}
             if #events > 0 then return Err('idempotency_conflict', 'Request ID already belongs to another organization operation.') end
             local revision = tonumber(organization.revision)
             if not Organizations.Integer(revision, 1, 9007199254740990) or not transitions[organization.status] then
@@ -92,14 +92,14 @@ function OrganizationLifecycle.Change(request, resource)
             if not OrganizationLifecycle.CanTransition(organization.status, request.status) then
                 return Err('invalid_transition', 'Organization status transition is not allowed.')
             end
-            query([[UPDATE `feather_organizations` SET `status`=?,`revision`=`revision`+1
-                WHERE `organization_id`=? AND `revision`=?]], { request.status, request.organizationId, revision })
-            OrganizationEvents.Record(query,request.organizationId,'organization.status_changed',resource,
+            tx.exec([[UPDATE `feather_organizations` SET `status`=?,`revision`=`revision`+1
+                WHERE `organization_id`=? AND `revision`=?]], request.status, request.organizationId, revision)
+            OrganizationEvents.Record(tx,request.organizationId,'organization.status_changed',resource,
                 request.requestId,request.reasonCode,revision+1,{status=request.status,previousStatus=organization.status})
             local value = { organizationId = request.organizationId, previousStatus = organization.status,
                 status = request.status, revision = revision + 1, replayed = false }
-            query([[UPDATE `feather_organization_lifecycle_receipts` SET `result_json`=?
-                WHERE `source_resource`=? AND `request_id`=?]], { json.encode(value), resource, request.requestId })
+            tx.exec([[UPDATE `feather_organization_lifecycle_receipts` SET `result_json`=?
+                WHERE `source_resource`=? AND `request_id`=?]], json.encode(value), resource, request.requestId)
             return Ok(value)
         end, debug.traceback)
         if not executed then

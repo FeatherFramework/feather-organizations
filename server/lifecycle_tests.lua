@@ -72,11 +72,10 @@ Organizations.RegisterDevCommand('OrganizationsLifecycleLiveTest',function(sourc
         local terminal = OrganizationLifecycle.Change({ organizationId=id,expectedRevision=6,status='active',
             requestId=base .. ':terminal',reasonCode='development.lifecycle_test' },owner)
         local current = OrganizationIdentity.Get({organizationId=id},owner)
-        local counts = MySQL.single.await([[SELECT
+        local counts = DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organization_events` WHERE `organization_id`=?) AS events,
             (SELECT COUNT(*) FROM `feather_organization_lifecycle_receipts`
-                WHERE `source_resource`=? AND `request_id` IN (?,?)) AS rejected_receipts]],
-            {id,owner,base .. ':stale',base .. ':terminal'})
+                WHERE `source_resource`=? AND `request_id` IN (?,?)) AS rejected_receipts]], id,owner,base .. ':stale',base .. ':terminal')
         local good = not stale.ok and stale.code=='revision_conflict' and not terminal.ok
             and terminal.code=='invalid_transition' and current.ok and current.value.status=='dissolved'
             and current.value.revision==6 and counts and tonumber(counts.events)==6

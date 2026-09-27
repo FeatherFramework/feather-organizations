@@ -12,6 +12,10 @@ CreateThread(function()
             or type(capabilities.value) ~= 'table' or capabilities.value.contract ~= Config.RequiredCoreContract then
             return Organizations.Err('dependency_unavailable', 'Core Contract 1 is required.')
         end
+        Organizations.SetState('waiting', 'waiting_for_database')
+        if DB.awaitReady(Config.ReadinessTimeoutMs) ~= true then
+            return Organizations.Err('dependency_unavailable', 'Database did not become ready.')
+        end
         Organizations.SetState('migrating', 'database_migrations')
         local migrated = OrganizationMigrations.Run()
         if not migrated.ok then return migrated end
@@ -33,7 +37,7 @@ CreateThread(function()
 end)
 
 AddEventHandler('onResourceStop', function(resource)
-    if resource == 'feather-core' or resource == 'oxmysql' then
+    if resource == 'feather-core' or resource == 'feather-mysql' then
         OrganizationEvents.Stop()
         Organizations.Fail(Organizations.Err('dependency_unavailable', 'A required dependency stopped. Restart Organizations after it is ready.'))
     elseif resource == GetCurrentResourceName() then
@@ -60,9 +64,8 @@ Organizations.RegisterDevCommand('OrganizationsFoundationSmokeTest', function(so
         local denied = OrganizationTypes.List('untrusted-smoke-caller')
         local unknown = OrganizationTypes.Get('unknown_smoke_type', owner)
         local invalid = OrganizationTypes.Get({}, owner)
-        local persisted = MySQL.single.await(
-            'SELECT `organization_type_id` FROM `feather_organization_types` WHERE `type_key`=?', { 'business' })
-        local migrations = MySQL.scalar.await('SELECT COUNT(*) FROM `feather_organization_schema_migrations`')
+        local persisted = DB.one('SELECT `organization_type_id` FROM `feather_organization_types` WHERE `type_key`=?', 'business')
+        local migrations = DB.value('SELECT COUNT(*) FROM `feather_organization_schema_migrations`')
         local tests = {
             { 'capabilities', caps.ok and caps.value.contract == 1 and caps.value.features.organizations == 1 },
             { 'health ready', health.ok and health.value.state == 'ready' },

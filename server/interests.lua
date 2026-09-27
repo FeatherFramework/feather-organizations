@@ -133,22 +133,21 @@ function OrganizationInterests.Change(request,resource,operation)
         if not decision.ok then return decision end
     end
     local result
-    local called,committed=pcall(MySQL.startTransaction,function(query)
+    local called,committed=pcall(DB.transaction, function(tx)
         local executed,outcome=xpcall(function()
             -- Same ordering as hierarchy writers: guard, receipt, then sorted
             -- organization rows. Holder/target lifecycle checks share row locks.
-            local guard=query('SELECT `id` FROM `feather_organization_hierarchy_guard` WHERE `id`=1 FOR UPDATE') or {}
+            local guard=tx.query('SELECT `id` FROM `feather_organization_hierarchy_guard` WHERE `id`=1 FOR UPDATE') or {}
             if not guard[1] then return Err('invalid_persistence','Organization graph guard missing.') end
-            query([[INSERT IGNORE INTO `feather_organization_interest_receipts`
-                (`source_resource`,`request_id`,`request_fingerprint`) VALUES (?,?,?)]],{resource,request.requestId,fingerprint})
-            local receipts=query([[SELECT `request_fingerprint`,`result_json` FROM `feather_organization_interest_receipts`
-                WHERE `source_resource`=? AND `request_id`=? FOR UPDATE]],{resource,request.requestId}) or {}
+            tx.exec([[INSERT IGNORE INTO `feather_organization_interest_receipts`
+                (`source_resource`,`request_id`,`request_fingerprint`) VALUES (?,?,?)]], resource,request.requestId,fingerprint)
+            local receipts=tx.query([[SELECT `request_fingerprint`,`result_json` FROM `feather_organization_interest_receipts`
+                WHERE `source_resource`=? AND `request_id`=? FOR UPDATE]], resource,request.requestId) or {}
             local receipt=receipts[1]
             if not receipt then return Err('internal_error','Could not reserve interest receipt.') end
             if receipt.request_fingerprint~=fingerprint then return Err('idempotency_conflict','Request ID is bound to another interest operation.') end
-            local nodes=query([[SELECT `organization_id`,`created_by_resource`,`status`,`revision` FROM `feather_organizations`
-                WHERE `organization_id` IN (?,?) ORDER BY `organization_id` FOR UPDATE]],
-                {request.organizationId,request.holderType=='organization' and request.holderId or request.organizationId}) or {}
+            local nodes=tx.query([[SELECT `organization_id`,`created_by_resource`,`status`,`revision` FROM `feather_organizations`
+                WHERE `organization_id` IN (?,?) ORDER BY `organization_id` FOR UPDATE]], request.organizationId,request.holderType=='organization' and request.holderId or request.organizationId) or {}
             local target,holder
             for _,row in ipairs(nodes) do
                 if row.organization_id==request.organizationId then target=row end
@@ -169,8 +168,7 @@ function OrganizationInterests.Change(request,resource,operation)
                 end
                 value.replayed=true;return Ok(value)
             end
-            local events=query('SELECT `event_id` FROM `feather_organization_events` WHERE `source_resource`=? AND `request_id`=?',
-                {resource,request.requestId}) or {}
+            local events=tx.query('SELECT `event_id` FROM `feather_organization_events` WHERE `source_resource`=? AND `request_id`=?', resource,request.requestId) or {}
             if #events>0 then return Err('idempotency_conflict','Request ID belongs to another organization operation.') end
             if tonumber(target.revision)~=request.expectedRevision then return Err('revision_conflict','Organization revision changed.') end
             if target.status=='dissolved' or (operation=='grant' and target.status~='pending' and target.status~='active' and target.status~='suspended') then
@@ -185,31 +183,27 @@ function OrganizationInterests.Change(request,resource,operation)
                     if not resolved.ok then return resolved end
                 end
             end
-            local interests=query([[SELECT `interest_id`,`status` FROM `feather_organization_interests`
-                WHERE `organization_id`=? AND `interest_type`=? AND `holder_type`=? AND `holder_id`=? FOR UPDATE]],
-                {request.organizationId,request.interestType,request.holderType,request.holderId}) or {}
+            local interests=tx.query([[SELECT `interest_id`,`status` FROM `feather_organization_interests`
+                WHERE `organization_id`=? AND `interest_type`=? AND `holder_type`=? AND `holder_id`=? FOR UPDATE]], request.organizationId,request.interestType,request.holderType,request.holderId) or {}
             local interest=interests[1]
             if operation=='revoke' and not interest then return Err('interest_not_found','Interest not found.') end
             if interest and interest.status==status then return Err('no_change','Interest is already in the requested state.') end
             local id=interest and interest.interest_id
             if not id then
-                local ids=query('SELECT UUID() AS id') or {};id=ids[1] and ids[1].id
+                local ids=tx.query('SELECT UUID() AS id') or {};id=ids[1] and ids[1].id
                 if not Organizations.Uuid(id) then return Err('invalid_persistence','Interest UUID unavailable.') end
-                query([[INSERT INTO `feather_organization_interests`
+                tx.exec([[INSERT INTO `feather_organization_interests`
                     (`interest_id`,`organization_id`,`interest_type`,`holder_type`,`holder_id`,`status`,`revision`)
-                    VALUES (?,?,?,?,?,?,?)]],{id,request.organizationId,request.interestType,request.holderType,request.holderId,status,request.expectedRevision+1})
+                    VALUES (?,?,?,?,?,?,?)]], id,request.organizationId,request.interestType,request.holderType,request.holderId,status,request.expectedRevision+1)
             else
-                query('UPDATE `feather_organization_interests` SET `status`=?,`revision`=? WHERE `interest_id`=?',
-                    {status,request.expectedRevision+1,id})
+                tx.exec('UPDATE `feather_organization_interests` SET `status`=?,`revision`=? WHERE `interest_id`=?', status,request.expectedRevision+1,id)
             end
-            query('UPDATE `feather_organizations` SET `revision`=`revision`+1 WHERE `organization_id`=? AND `revision`=?',
-                {request.organizationId,request.expectedRevision})
-            OrganizationEvents.Record(query,request.organizationId,'organization.interest_'..(operation=='grant' and 'granted' or 'revoked'),
+            tx.exec('UPDATE `feather_organizations` SET `revision`=`revision`+1 WHERE `organization_id`=? AND `revision`=?', request.organizationId,request.expectedRevision)
+            OrganizationEvents.Record(tx,request.organizationId,'organization.interest_'..(operation=='grant' and 'granted' or 'revoked'),
                 resource,request.requestId,request.reasonCode,request.expectedRevision+1,{interestId=id,interestType=request.interestType,interestStatus=status})
             local value={interestId=id,organizationId=request.organizationId,holderType=request.holderType,holderId=request.holderId,
                 interestType=request.interestType,status=status,revision=request.expectedRevision+1,replayed=false}
-            query('UPDATE `feather_organization_interest_receipts` SET `result_json`=? WHERE `source_resource`=? AND `request_id`=?',
-                {json.encode(value),resource,request.requestId})
+            tx.exec('UPDATE `feather_organization_interest_receipts` SET `result_json`=? WHERE `source_resource`=? AND `request_id`=?', json.encode(value),resource,request.requestId)
             return Ok(value)
         end,debug.traceback)
         if not executed then print('[feather-organizations] interest transaction failed: '..tostring(outcome));result=Err('internal_error','Interest transaction failed.');return false end
@@ -289,7 +283,7 @@ function OrganizationInterests.List(request,resource)
     local valid=OrganizationInterests.ValidateList(request)
     if not valid.ok then return valid end
     local options=valid.value
-    local owner=MySQL.single.await('SELECT `created_by_resource` FROM `feather_organizations` WHERE `organization_id`=?',{options.organizationId})
+    local owner=DB.one('SELECT `created_by_resource` FROM `feather_organizations` WHERE `organization_id`=?', options.organizationId)
     if not owner then return Err('organization_not_found','Organization not found.') end
     if owner.created_by_resource~=resource and Config.Access.privilegedAuditors[resource]~=true then
         return Err('authorization_denied','Caller cannot inspect these controlling interests.')
@@ -298,14 +292,13 @@ function OrganizationInterests.List(request,resource)
         FROM `feather_organization_interests` WHERE `organization_id`=?]]
     local params={options.organizationId}
     if options.cursor then
-        local cursor=MySQL.single.await('SELECT `status` FROM `feather_organization_interests` WHERE `interest_id`=? AND `organization_id`=?',
-            {options.cursor,options.organizationId})
+        local cursor=DB.one('SELECT `status` FROM `feather_organization_interests` WHERE `interest_id`=? AND `organization_id`=?', options.cursor,options.organizationId)
         if not cursor or (options.status and cursor.status~=options.status) then return Err('invalid_cursor','Cursor does not belong to this organization/filter.') end
         sql=sql..' AND `interest_id`>?';params[#params+1]=options.cursor
     end
     if options.status then sql=sql..' AND `status`=?';params[#params+1]=options.status end
     sql=sql..' ORDER BY `interest_id` LIMIT ?';params[#params+1]=options.limit+1
-    local rows=MySQL.query.await(sql,params) or {}
+    local rows=DB.query(sql, table.unpack(params)) or {}
     local items={}
     for index=1,math.min(#rows,options.limit) do
         local row=rows[index]
@@ -384,11 +377,10 @@ Organizations.RegisterDevCommand('OrganizationsServicePolicyLiveTest',function(s
         local page=Require(OrganizationInterests.List({organizationId=created.organizationId},owner))
         assert(current.revision==3 and #page.items==1 and page.items[1].interestId==granted.interestId
             and page.items[1].status=='revoked' and page.items[1].revision==3,'Service mutation state inconsistent')
-        local counts=MySQL.single.await([[SELECT
+        local counts=DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id=?) AS events,
             (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?) AS outbox,
-            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?)) AS receipts]],
-            {created.organizationId,created.organizationId,owner,grant.requestId,revoke.requestId})
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?)) AS receipts]], created.organizationId,created.organizationId,owner,grant.requestId,revoke.requestId)
         assert(tonumber(counts.events)==3 and tonumber(counts.outbox)==3 and tonumber(counts.receipts)==2,'Service mutation counts inconsistent')
         local after=Require(exports['feather-core']:GetProvider('policy',nil,1)).provider
         assert(Config.Authorization.enabled==true and after.name==provider.name and after.owner==provider.owner,'Production policy configuration changed')
@@ -461,11 +453,10 @@ Organizations.RegisterDevCommand('OrganizationsInterestPolicyLiveTest',function(
         local page=Require(OrganizationInterests.List({organizationId=created.organizationId},owner))
         assert(current.revision==2 and #page.items==1 and page.items[1].status=='active' and page.items[1].interestId==granted.interestId
             and afterForeign.revision==foreign.revision,'Rejected policy requests changed state')
-        local counts=MySQL.single.await([[SELECT
+        local counts=DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id=?) AS events,
             (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?) AS outbox,
-            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?,?,?)) AS rejected]],
-            {created.organizationId,created.organizationId,owner,args[1]..':deny',args[1]..':malformed',args[1]..':exception',args[1]..':foreign',args[1]..':unavailable'})
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?,?,?)) AS rejected]], created.organizationId,created.organizationId,owner,args[1]..':deny',args[1]..':malformed',args[1]..':exception',args[1]..':foreign',args[1]..':unavailable')
         assert(tonumber(counts.events)==2 and tonumber(counts.outbox)==2 and tonumber(counts.rejected)==0,'Policy rejection persisted partial records')
         print(('[OrganizationsInterestPolicyLiveTest] checks passed id=%s revision=2 realCoreProvider=true allow=true deny=true malformed=true exception=true unavailable=true ownershipEnforced=true events=2 outbox=2 firstReplayed=%s'):format(
             created.organizationId,tostring(granted.replayed)))
@@ -530,11 +521,10 @@ Organizations.RegisterDevCommand('OrganizationsInterestHolderLifecycleTest',func
         assert(targetState.revision==4 and targetState.status=='pending' and holderState.revision==4 and holderState.status=='active'
             and #final.items==1 and final.items[1].interestId==granted.interestId and final.items[1].status=='active'
             and final.items[1].revision==4,'Final holder/target state inconsistent')
-        local counts=MySQL.single.await([[SELECT
+        local counts=DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id IN (?,?)) AS events,
             (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id IN (?,?)) AS outbox,
-            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS rejected]],
-            {target.organizationId,holder.organizationId,target.organizationId,holder.organizationId,owner,args[1]..':blocked'})
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS rejected]], target.organizationId,holder.organizationId,target.organizationId,holder.organizationId,owner,args[1]..':blocked')
         assert(tonumber(counts.events)==8 and tonumber(counts.outbox)==8 and tonumber(counts.rejected)==0,'Holder lifecycle counts inconsistent')
         print(('[OrganizationsInterestHolderLifecycleTest] PASS target=%s holder=%s targetRevision=4 holderRevision=4 inactiveGrantBlocked=true inactiveReadable=true cleanupAllowed=true resumedGrant=true stableIdentity=true events=8 outbox=8 rolledBack=true firstReplayed=%s'):format(
             target.organizationId,holder.organizationId,tostring(granted.replayed)))
@@ -588,11 +578,10 @@ Organizations.RegisterDevCommand('OrganizationsInterestLifecycleTest',function(s
         assert(current.status=='dissolved' and current.revision==5 and #revokedPage.items==1 and not revokedPage.nextCursor
             and revokedPage.items[1].interestId==granted.interestId and revokedPage.items[1].revision==4
             and #active.items==0 and #history.items==5,'Terminal state/read inconsistent')
-        local counts=MySQL.single.await([[SELECT
+        local counts=DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?) AS outbox,
             (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?)) AS receipts,
-            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?)) AS rejected]],
-            {id,owner,grant.requestId,revoke.requestId,owner,args[1]..':blocked_grant',args[1]..':terminal_grant',args[1]..':terminal_revoke'})
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?)) AS rejected]], id,owner,grant.requestId,revoke.requestId,owner,args[1]..':blocked_grant',args[1]..':terminal_grant',args[1]..':terminal_revoke')
         assert(tonumber(counts.outbox)==5 and tonumber(counts.receipts)==2 and tonumber(counts.rejected)==0,'Atomic counts invalid')
         print(('[OrganizationsInterestLifecycleTest] PASS id=%s state=dissolved revision=5 grantBlocked=true cleanupAllowed=true terminalBlocked=true originalReceipts=true historyReadable=true events=5 outbox=5 rolledBack=true firstReplayed=%s'):format(id,tostring(granted.replayed)))
     end,debug.traceback)
@@ -667,11 +656,10 @@ Organizations.RegisterDevCommand('OrganizationsInterestReadLiveTest',function(so
         for _,item in ipairs(reread.items) do assert(item.holderId==items[item.interestId].holderId,'Caller mutation changed stored data') end
         local current=Require(OrganizationIdentity.Get({organizationId=id},owner))
         assert(current.revision==5 and current.status=='pending','Shared organization revision inconsistent')
-        local counts=MySQL.single.await([[SELECT
+        local counts=DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id=?) AS events,
             (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?) AS outbox,
-            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?,?)) AS receipts]],
-            {id,id,owner,requests[1].requestId,requests[2].requestId,requests[3].requestId,revoke.requestId})
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?,?)) AS receipts]], id,id,owner,requests[1].requestId,requests[2].requestId,requests[3].requestId,revoke.requestId)
         assert(tonumber(counts.events)==5 and tonumber(counts.outbox)==5 and tonumber(counts.receipts)==4,'Replay record counts changed')
         print(('[OrganizationsInterestReadLiveTest] PASS id=%s revision=5 interests=3 active=2 revoked=1 paginated=true isolated=true cursorBoundaries=true organizationHolder=true events=5 outbox=5 firstReplayed=%s'):format(id,tostring(granted[1].replayed)))
     end,debug.traceback)
@@ -721,20 +709,19 @@ Organizations.RegisterDevCommand('OrganizationsInterestLiveTest',function(source
         assert(not missingResult.ok and missingResult.code=='holder_not_found','Missing holder accepted')
         local after=Require(OrganizationIdentity.Get({organizationId=id},owner))
         assert(after.revision==4 and after.status=='pending','Replay/rejection altered organization')
-        local row=MySQL.single.await('SELECT `interest_id`,`status`,`revision` FROM `feather_organization_interests` WHERE `organization_id`=?',{id})
+        local row=DB.one('SELECT `interest_id`,`status`,`revision` FROM `feather_organization_interests` WHERE `organization_id`=?', id)
         assert(row and row.interest_id==first.interestId and row.status=='active' and tonumber(row.revision)==4,'Interest persistence inconsistent')
-        local counts=MySQL.single.await([[SELECT
+        local counts=DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organization_interests` WHERE `organization_id`=?) AS interests,
             (SELECT COUNT(*) FROM `feather_organization_events` WHERE `organization_id`=?) AS events,
             (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?) AS outbox,
             (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?)) AS receipts,
-            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?)) AS rejected_receipts]],
-            {id,id,id,owner,grant.requestId,revoke.requestId,regrant.requestId,owner,stale.requestId,unchanged.requestId,missing.requestId})
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id IN (?,?,?)) AS rejected_receipts]], id,id,id,owner,grant.requestId,revoke.requestId,regrant.requestId,owner,stale.requestId,unchanged.requestId,missing.requestId)
         assert(tonumber(counts.interests)==1 and tonumber(counts.events)==4 and tonumber(counts.outbox)==4
             and tonumber(counts.receipts)==3 and tonumber(counts.rejected_receipts)==0,'Atomic record counts invalid')
-        local rows=MySQL.query.await([[SELECT o.payload_json FROM `feather_organization_outbox` o
+        local rows=DB.query([[SELECT o.payload_json FROM `feather_organization_outbox` o
             JOIN `feather_organization_events` e ON e.event_id=o.event_id
-            WHERE e.organization_id=? AND e.event_type IN ('organization.interest_granted','organization.interest_revoked')]],{id}) or {}
+            WHERE e.organization_id=? AND e.event_type IN ('organization.interest_granted','organization.interest_revoked')]], id) or {}
         assert(#rows==3,'Interest events missing')
         for _,event in ipairs(rows) do
             local payload=json.decode(event.payload_json)

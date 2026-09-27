@@ -69,14 +69,13 @@ Organizations.RegisterDevCommand('OrganizationsCreationLiveTest', function(sourc
         local conflict = OrganizationIdentity.Create(duplicate, owner)
         local found = OrganizationIdentity.Find({ organizationKey = request.organizationKey },owner)
         local read = OrganizationIdentity.Get({ organizationId = first.value.organizationId },owner)
-        local counts = MySQL.single.await([[SELECT
+        local counts = DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organizations` WHERE `organization_key`=?) AS entities,
             (SELECT COUNT(*) FROM `feather_organization_events` WHERE `organization_id`=?) AS events,
             (SELECT COUNT(*) FROM `feather_organization_creation_receipts`
                 WHERE `source_resource`=? AND `request_id`=?) AS receipts,
             (SELECT COUNT(*) FROM `feather_organization_creation_receipts`
-                WHERE `source_resource`=? AND `request_id`=?) AS duplicate_receipts]],
-            { request.organizationKey, first.value.organizationId,owner,args[1],owner,duplicate.requestId })
+                WHERE `source_resource`=? AND `request_id`=?) AS duplicate_receipts]], request.organizationKey, first.value.organizationId,owner,args[1],owner,duplicate.requestId)
         local good = replay.ok and replay.value.replayed == true
             and replay.value.organizationId == first.value.organizationId
             and not mismatch.ok and mismatch.code == 'idempotency_conflict'
