@@ -9,8 +9,8 @@ local names={
     ['organization.interest_granted']='organizations.organization.interest_granted.v1',
     ['organization.interest_revoked']='organizations.organization.interest_revoked.v1'
 }
-function OrganizationEvents.Record(query,organizationId,eventType,resource,requestId,reason,revision,details)
-    local rows=query('SELECT UUID() AS id') or {}
+function OrganizationEvents.Record(tx,organizationId,eventType,resource,requestId,reason,revision,details)
+    local rows=tx.query('SELECT UUID() AS id') or {}
     local eventId=rows[1] and rows[1].id
     if not Organizations.Uuid(eventId) or not names[eventType] then error('Invalid organization event identity/type.') end
     local payload={eventId=eventId,organizationId=organizationId,revision=revision,
@@ -18,16 +18,15 @@ function OrganizationEvents.Record(query,organizationId,eventType,resource,reque
     for _,field in ipairs({'status','previousStatus','organizationType','parentOrganizationId','previousParentOrganizationId','interestId','interestType','interestStatus'}) do
         if details and details[field]~=nil then payload[field]=details[field] end
     end
-    query([[INSERT INTO `feather_organization_events`
+    tx.exec([[INSERT INTO `feather_organization_events`
         (`event_id`,`organization_id`,`event_type`,`source_resource`,`request_id`,`reason_code`,`revision`)
-        VALUES (?,?,?,?,?,?,?)]],{eventId,organizationId,eventType,resource,requestId,reason,revision})
-    query([[INSERT INTO `feather_organization_outbox` (`event_id`,`event_type`,`payload_json`) VALUES (?,?,?)]],
-        {eventId,names[eventType],json.encode(payload)})
+        VALUES (?,?,?,?,?,?,?)]], eventId,organizationId,eventType,resource,requestId,reason,revision)
+    tx.exec([[INSERT INTO `feather_organization_outbox` (`event_id`,`event_type`,`payload_json`) VALUES (?,?,?)]], eventId,names[eventType],json.encode(payload))
 end
 local function Deliver()
-    local rows=MySQL.query.await([[SELECT `event_id`,`event_type`,`payload_json`
+    local rows=DB.query([[SELECT `event_id`,`event_type`,`payload_json`
         FROM `feather_organization_outbox` WHERE `status`='pending' AND `available_at`<=CURRENT_TIMESTAMP
-        ORDER BY `created_at`,`event_id` LIMIT ?]],{Config.Outbox.batchSize}) or {}
+        ORDER BY `created_at`,`event_id` LIMIT ?]], Config.Outbox.batchSize) or {}
     for _,row in ipairs(rows) do
         if not running then return end
         local decoded,payload=pcall(json.decode,row.payload_json)
@@ -36,12 +35,11 @@ local function Deliver()
             called,published=pcall(function() return exports['feather-core']:PublishEvent(row.event_type,payload) end)
         end
         if called and type(published)=='table' and published.ok then
-            MySQL.update.await([[UPDATE `feather_organization_outbox` SET `status`='published',
-                `published_at`=CURRENT_TIMESTAMP,`attempts`=`attempts`+1 WHERE `event_id`=? AND `status`='pending']],{row.event_id})
+            DB.exec([[UPDATE `feather_organization_outbox` SET `status`='published',
+                `published_at`=CURRENT_TIMESTAMP,`attempts`=`attempts`+1 WHERE `event_id`=? AND `status`='pending']], row.event_id)
         else
-            MySQL.update.await([[UPDATE `feather_organization_outbox` SET `attempts`=`attempts`+1,
-                `available_at`=DATE_ADD(CURRENT_TIMESTAMP,INTERVAL ? SECOND) WHERE `event_id`=? AND `status`='pending']],
-                {Config.Outbox.retryDelaySeconds,row.event_id})
+            DB.exec([[UPDATE `feather_organization_outbox` SET `attempts`=`attempts`+1,
+                `available_at`=DATE_ADD(CURRENT_TIMESTAMP,INTERVAL ? SECOND) WHERE `event_id`=? AND `status`='pending']], Config.Outbox.retryDelaySeconds,row.event_id)
             print(('[feather-organizations] event=outbox.failed id=%s code=%s'):format(row.event_id,
                 type(published)=='table' and tostring(published.code) or 'publication_unavailable'))
         end
@@ -65,7 +63,7 @@ function OrganizationEvents.Start()
 end
 function OrganizationEvents.Stop() running=false end
 function OrganizationEvents.State()
-    local rows=MySQL.query.await('SELECT `status`,COUNT(*) AS total FROM `feather_organization_outbox` GROUP BY `status`') or {}
+    local rows=DB.query('SELECT `status`,COUNT(*) AS total FROM `feather_organization_outbox` GROUP BY `status`') or {}
     local state={running=running,pending=0,published=0}
     for _,row in ipairs(rows) do state[row.status]=tonumber(row.total) end
     return Ok(state)
@@ -89,7 +87,7 @@ function OrganizationEvents.History(request,resource)
     local valid=OrganizationEvents.ValidateHistory(request)
     if not valid.ok then return valid end
     local options=valid.value
-    local owner=MySQL.single.await('SELECT `created_by_resource` FROM `feather_organizations` WHERE `organization_id`=?',{options.organizationId})
+    local owner=DB.one('SELECT `created_by_resource` FROM `feather_organizations` WHERE `organization_id`=?', options.organizationId)
     if not owner then return Err('organization_not_found','Organization not found.') end
     if owner.created_by_resource~=resource and Config.Access.privilegedAuditors[resource]~=true then
         return Err('authorization_denied','Caller cannot inspect this organization history.')
@@ -98,14 +96,14 @@ function OrganizationEvents.History(request,resource)
         UNIX_TIMESTAMP(`created_at`)*1000 AS created_at_ms FROM `feather_organization_events` WHERE `organization_id`=?]]
     local params={options.organizationId}
     if options.cursor then
-        local cursor=MySQL.single.await([[SELECT DATE_FORMAT(`created_at`,'%Y-%m-%d %H:%i:%s') AS cursor_time
-            FROM `feather_organization_events` WHERE `event_id`=? AND `organization_id`=?]],{options.cursor,options.organizationId})
+        local cursor=DB.one([[SELECT DATE_FORMAT(`created_at`,'%Y-%m-%d %H:%i:%s') AS cursor_time
+            FROM `feather_organization_events` WHERE `event_id`=? AND `organization_id`=?]], options.cursor,options.organizationId)
         if not cursor then return Err('invalid_cursor','History cursor does not belong to this organization.') end
         sql=sql .. ' AND (`created_at`<? OR (`created_at`=? AND `event_id`<?))'
         params[#params+1]=cursor.cursor_time;params[#params+1]=cursor.cursor_time;params[#params+1]=options.cursor
     end
     sql=sql .. ' ORDER BY `created_at` DESC,`event_id` DESC LIMIT ?';params[#params+1]=options.limit+1
-    local rows=MySQL.query.await(sql,params) or {}
+    local rows=DB.query(sql, table.unpack(params)) or {}
     local items={}
     for index=1,math.min(#rows,options.limit) do
         local row=rows[index]

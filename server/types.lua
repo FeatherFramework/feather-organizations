@@ -4,18 +4,17 @@ local catalog = {}
 function OrganizationTypes.Load()
     -- Explicit UUID values for MariaDB; stable keys retain UUID identity on restart.
     for _, definition in ipairs(Config.Types) do
-        local existing = MySQL.single.await(
-            'SELECT `owner_resource` FROM `feather_organization_types` WHERE `type_key`=?', { definition.key })
+        local existing = DB.one('SELECT `owner_resource` FROM `feather_organization_types` WHERE `type_key`=?', definition.key)
         if existing and existing.owner_resource ~= GetCurrentResourceName() then
             return Organizations.Err('type_owner_conflict', 'Configured type belongs to another resource.')
         end
-        MySQL.query.await([[INSERT INTO `feather_organization_types`
+        DB.exec([[INSERT INTO `feather_organization_types`
             (`organization_type_id`,`type_key`,`label`,`owner_resource`) VALUES (UUID(),?,?,?)
             ON DUPLICATE KEY UPDATE
                 `revision`=`revision` + IF(`label` <> VALUES(`label`),1,0),
-                `label`=VALUES(`label`)]], { definition.key, definition.label, GetCurrentResourceName() })
+                `label`=VALUES(`label`)]], definition.key, definition.label, GetCurrentResourceName())
     end
-    local rows = MySQL.query.await([[SELECT `organization_type_id`,`type_key`,`label`,`status`,`revision`
+    local rows = DB.query([[SELECT `organization_type_id`,`type_key`,`label`,`status`,`revision`
         FROM `feather_organization_types` ORDER BY `type_key` LIMIT 33]]) or {}
     if #rows > 32 then return Organizations.Err('type_catalog_limit', 'Type catalog exceeds the foundation limit of 32.') end
     local loaded = {}

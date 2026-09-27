@@ -40,7 +40,7 @@ function OrganizationDirectory.List(request,resource)
     if options.organizationType then sql=sql .. ' AND t.`type_key`=?';params[#params+1]=options.organizationType end
     if options.parentOrganizationId then sql=sql .. ' AND p.`parent_organization_id`=?';params[#params+1]=options.parentOrganizationId end
     sql=sql .. ' ORDER BY o.`organization_key` ASC LIMIT ?';params[#params+1]=options.limit+1
-    local rows=MySQL.query.await(sql,params) or {}
+    local rows=DB.query(sql, table.unpack(params)) or {}
     local items={}
     for index=1,math.min(#rows,options.limit) do
         local snapshot=OrganizationIdentity.Snapshot(rows[index])
@@ -87,16 +87,16 @@ function OrganizationDirectory.Update(request,resource)
     local current=Organizations.CheckRead(resource)
     if not current.ok then return current end
     local result
-    local called,committed=pcall(MySQL.startTransaction,function(query)
+    local called,committed=pcall(DB.transaction, function(tx)
         local executed,outcome=xpcall(function()
-            query([[INSERT IGNORE INTO `feather_organization_identity_receipts`
-                (`source_resource`,`request_id`,`request_fingerprint`) VALUES (?,?,?)]],{resource,request.requestId,valid.value})
-            local receipts=query([[SELECT `request_fingerprint`,`result_json` FROM `feather_organization_identity_receipts`
-                WHERE `source_resource`=? AND `request_id`=? FOR UPDATE]],{resource,request.requestId}) or {}
+            tx.exec([[INSERT IGNORE INTO `feather_organization_identity_receipts`
+                (`source_resource`,`request_id`,`request_fingerprint`) VALUES (?,?,?)]], resource,request.requestId,valid.value)
+            local receipts=tx.query([[SELECT `request_fingerprint`,`result_json` FROM `feather_organization_identity_receipts`
+                WHERE `source_resource`=? AND `request_id`=? FOR UPDATE]], resource,request.requestId) or {}
             local receipt=receipts[1]
             if not receipt then return Err('internal_error','Could not reserve identity receipt.') end
             if receipt.request_fingerprint~=valid.value then return Err('idempotency_conflict','Request ID is bound to another identity update.') end
-            local rows=query(OrganizationIdentity.SelectSql .. ' WHERE o.`organization_id`=? FOR UPDATE',{request.organizationId}) or {}
+            local rows=tx.query(OrganizationIdentity.SelectSql .. ' WHERE o.`organization_id`=? FOR UPDATE', request.organizationId) or {}
             local row=rows[1]
             if not row then return Err('organization_not_found','Organization not found.') end
             if row.created_by_resource~=resource and Config.Access.privilegedMutators[resource]~=true then
@@ -112,8 +112,8 @@ function OrganizationDirectory.Update(request,resource)
                 end
                 value.replayed=true;return Ok(value)
             end
-            local events=query([[SELECT `event_id` FROM `feather_organization_events`
-                WHERE `source_resource`=? AND `request_id`=?]],{resource,request.requestId}) or {}
+            local events=tx.query([[SELECT `event_id` FROM `feather_organization_events`
+                WHERE `source_resource`=? AND `request_id`=?]], resource,request.requestId) or {}
             if #events>0 then return Err('idempotency_conflict','Request ID belongs to another organization operation.') end
             local snapshot=OrganizationIdentity.Snapshot(row)
             if not snapshot.ok then return snapshot end
@@ -122,15 +122,15 @@ function OrganizationDirectory.Update(request,resource)
                 return Err('organization_inactive','Dissolving or dissolved identity cannot be edited.')
             end
             if row.legal_name==request.legalName and row.display_name==request.displayName then return Err('no_change','Names are unchanged.') end
-            query([[UPDATE `feather_organizations` SET `legal_name`=?,`display_name`=?,`revision`=`revision`+1
-                WHERE `organization_id`=? AND `revision`=?]],{request.legalName,request.displayName,request.organizationId,request.expectedRevision})
-            OrganizationEvents.Record(query,request.organizationId,'organization.identity_changed',resource,
+            tx.exec([[UPDATE `feather_organizations` SET `legal_name`=?,`display_name`=?,`revision`=`revision`+1
+                WHERE `organization_id`=? AND `revision`=?]], request.legalName,request.displayName,request.organizationId,request.expectedRevision)
+            OrganizationEvents.Record(tx,request.organizationId,'organization.identity_changed',resource,
                 request.requestId,request.reasonCode,request.expectedRevision+1)
             local value=snapshot.value
             value.legalName,value.displayName=request.legalName,request.displayName
             value.revision,value.replayed=request.expectedRevision+1,false
-            query([[UPDATE `feather_organization_identity_receipts` SET `result_json`=?
-                WHERE `source_resource`=? AND `request_id`=?]],{json.encode(value),resource,request.requestId})
+            tx.exec([[UPDATE `feather_organization_identity_receipts` SET `result_json`=?
+                WHERE `source_resource`=? AND `request_id`=?]], json.encode(value),resource,request.requestId)
             return Ok(value)
         end,debug.traceback)
         if not executed then

@@ -60,7 +60,7 @@ function OrganizationIdentity.Get(request, resource)
     for field in pairs(request) do
         if field ~= 'organizationId' then return Err('invalid_input', 'Unexpected read field.') end
     end
-    return Snapshot(MySQL.single.await(selectIdentity .. ' WHERE o.`organization_id`=?', { request.organizationId:lower() }))
+    return Snapshot(DB.one(selectIdentity .. ' WHERE o.`organization_id`=?', request.organizationId:lower()))
 end
 function OrganizationIdentity.Find(request, resource)
     local allowed = Organizations.CheckRead(resource)
@@ -71,7 +71,7 @@ function OrganizationIdentity.Find(request, resource)
     for field in pairs(request) do
         if field ~= 'organizationKey' then return Err('invalid_input', 'Unexpected lookup field.') end
     end
-    return Snapshot(MySQL.single.await(selectIdentity .. ' WHERE o.`organization_key`=?', { request.organizationKey }))
+    return Snapshot(DB.one(selectIdentity .. ' WHERE o.`organization_key`=?', request.organizationKey))
 end
 function OrganizationIdentity.Create(request, resource)
     if Config.Access.trustedCreators[resource or ''] ~= true then
@@ -94,14 +94,13 @@ function OrganizationIdentity.Create(request, resource)
     local current = Organizations.CheckRead(resource)
     if not current.ok then return current end
     local result
-    local called, committed = pcall(MySQL.startTransaction, function(query)
+    local called, committed = pcall(DB.transaction, function(tx)
         local executed, outcome = xpcall(function()
-            query([[INSERT IGNORE INTO `feather_organization_creation_receipts`
-                (`source_resource`,`request_id`,`request_fingerprint`) VALUES (?,?,?)]],
-                { resource, request.requestId, valid.value })
-            local receipts = query([[SELECT `request_fingerprint`,`result_json`
+            tx.exec([[INSERT IGNORE INTO `feather_organization_creation_receipts`
+                (`source_resource`,`request_id`,`request_fingerprint`) VALUES (?,?,?)]], resource, request.requestId, valid.value)
+            local receipts = tx.query([[SELECT `request_fingerprint`,`result_json`
                 FROM `feather_organization_creation_receipts`
-                WHERE `source_resource`=? AND `request_id`=? FOR UPDATE]], { resource, request.requestId }) or {}
+                WHERE `source_resource`=? AND `request_id`=? FOR UPDATE]], resource, request.requestId) or {}
             local receipt = receipts[1]
             if not receipt then return Err('internal_error', 'Creation receipt could not be reserved.') end
             if receipt.request_fingerprint ~= valid.value then
@@ -118,33 +117,33 @@ function OrganizationIdentity.Create(request, resource)
                 value.replayed = true
                 return Ok(value)
             end
-            local events = query([[SELECT `event_id` FROM `feather_organization_events`
-                WHERE `source_resource`=? AND `request_id`=?]], { resource, request.requestId }) or {}
+            local events = tx.query([[SELECT `event_id` FROM `feather_organization_events`
+                WHERE `source_resource`=? AND `request_id`=?]], resource, request.requestId) or {}
             if #events > 0 then
                 return Err('idempotency_conflict', 'Request ID already belongs to another organization operation.')
             end
-            local types = query([[SELECT `organization_type_id`,`status` FROM `feather_organization_types`
-                WHERE `type_key`=? FOR UPDATE]], { request.organizationType }) or {}
+            local types = tx.query([[SELECT `organization_type_id`,`status` FROM `feather_organization_types`
+                WHERE `type_key`=? FOR UPDATE]], request.organizationType) or {}
             if not types[1] then return Err('type_not_found', 'Organization type not found.') end
             if types[1].status ~= 'active' then return Err('type_retired', 'Organization type is retired.') end
-            local ids = query('SELECT UUID() AS id') or {}
+            local ids = tx.query('SELECT UUID() AS id') or {}
             local id = ids[1] and ids[1].id
             if not Organizations.Uuid(id) then return Err('internal_error', 'Could not generate organization UUID.') end
-            query([[INSERT IGNORE INTO `feather_organizations`
+            tx.exec([[INSERT IGNORE INTO `feather_organizations`
                 (`organization_id`,`organization_type_id`,`organization_key`,`legal_name`,`display_name`,`created_by_resource`)
-                VALUES (?,?,?,?,?,?)]], { id, types[1].organization_type_id, request.organizationKey,
-                    request.legalName, request.displayName, resource })
-            local rows = query(selectIdentity .. ' WHERE o.`organization_key`=? FOR UPDATE', { request.organizationKey }) or {}
+                VALUES (?,?,?,?,?,?)]], id, types[1].organization_type_id, request.organizationKey,
+                    request.legalName, request.displayName, resource)
+            local rows = tx.query(selectIdentity .. ' WHERE o.`organization_key`=? FOR UPDATE', request.organizationKey) or {}
             if not rows[1] or rows[1].organization_id ~= id then
                 return Err('organization_key_conflict', 'Organization key is already reserved.')
             end
             local created = Snapshot(rows[1])
             if not created.ok then return created end
             created.value.replayed = false
-            OrganizationEvents.Record(query,id,'organization.created',resource,request.requestId,request.reasonCode,1,
+            OrganizationEvents.Record(tx,id,'organization.created',resource,request.requestId,request.reasonCode,1,
                 {status=created.value.status,organizationType=request.organizationType})
-            query([[UPDATE `feather_organization_creation_receipts` SET `result_json`=?
-                WHERE `source_resource`=? AND `request_id`=?]], { json.encode(created.value), resource, request.requestId })
+            tx.exec([[UPDATE `feather_organization_creation_receipts` SET `result_json`=?
+                WHERE `source_resource`=? AND `request_id`=?]], json.encode(created.value), resource, request.requestId)
             return created
         end, debug.traceback)
         if not executed then

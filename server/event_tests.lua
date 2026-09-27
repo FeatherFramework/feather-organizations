@@ -17,7 +17,7 @@ Organizations.RegisterDevCommand('OrganizationsEventContractSmokeTest',function(
         end
         Check('bad cursor rejected',not OrganizationEvents.ValidateHistory({organizationId=id,cursor='bad'}).ok)
         Check('identity injection rejected',not OrganizationEvents.ValidateHistory({organizationId=id,sourceResource=GetCurrentResourceName()}).ok)
-        local invalid=tonumber(MySQL.scalar.await([[SELECT COUNT(*) FROM `feather_organization_outbox` o
+        local invalid=tonumber(DB.value([[SELECT COUNT(*) FROM `feather_organization_outbox` o
             LEFT JOIN `feather_organization_events` e ON e.event_id=o.event_id
             WHERE e.event_id IS NULL OR o.status NOT IN ('pending','published')
                 OR (o.status='published' AND o.published_at IS NULL)]]))
@@ -54,17 +54,17 @@ Organizations.RegisterDevCommand('OrganizationsEventRecoveryTest',function(sourc
             assert(OrganizationEvents.State().value.running,'Restart feather-organizations before retry')
             local found=OrganizationIdentity.Find({organizationKey=request.organizationKey},owner)
             assert(found.ok,'Prepare must create the test entity first')
-            local receipt=MySQL.scalar.await([[SELECT COUNT(*) FROM `feather_organization_creation_receipts`
-                WHERE `source_resource`=? AND `request_id`=? AND `result_json` IS NOT NULL]],{owner,args[1]})
+            local receipt=DB.value([[SELECT COUNT(*) FROM `feather_organization_creation_receipts`
+                WHERE `source_resource`=? AND `request_id`=? AND `result_json` IS NOT NULL]], owner,args[1])
             assert(tonumber(receipt)==1,'Original committed receipt required before retry')
         end
         local created=OrganizationIdentity.Create(request,owner)
         assert(created.ok,tostring(created.code)..': '..tostring(created.message))
         local id=created.value.organizationId
         local function Read()
-            return MySQL.query.await([[SELECT e.event_id,o.status,o.attempts,o.published_at FROM `feather_organization_events` e
+            return DB.query([[SELECT e.event_id,o.status,o.attempts,o.published_at FROM `feather_organization_events` e
                 LEFT JOIN `feather_organization_outbox` o ON o.event_id=e.event_id
-                WHERE e.organization_id=? AND e.source_resource=? AND e.request_id=?]],{id,owner,args[1]}) or {}
+                WHERE e.organization_id=? AND e.source_resource=? AND e.request_id=?]], id,owner,args[1]) or {}
         end
         local rows=Read()
         assert(#rows==1,'Expected one audit/outbox event')
@@ -79,7 +79,7 @@ Organizations.RegisterDevCommand('OrganizationsEventRecoveryTest',function(sourc
         while rows[1].status~='published' and GetGameTimer()<deadline do Wait(50);rows=Read();assert(#rows==1,'Event count changed') end
         assert(rows[1].status=='published' and rows[1].published_at~=nil,'Publication recovery timed out')
         assert(rows[1].event_id==originalEventId,'Event identity changed')
-        local count=tonumber(MySQL.scalar.await('SELECT COUNT(*) FROM `feather_organization_events` WHERE `organization_id`=?',{id}))
+        local count=tonumber(DB.value('SELECT COUNT(*) FROM `feather_organization_events` WHERE `organization_id`=?', id))
         assert(count==1,'Replay added an audit record')
         print(('[OrganizationsEventRecoveryTest] PASS id=%s eventId=%s replayed=true published=true events=1 stableIdentity=true'):format(id,originalEventId))
     end,debug.traceback)
@@ -142,9 +142,9 @@ Organizations.RegisterDevCommand('OrganizationsEventLiveTest',function(source,ar
         local deadline=GetGameTimer()+10000
         local rows
         repeat
-            rows=MySQL.query.await([[SELECT o.event_id,o.status FROM `feather_organization_outbox` o
+            rows=DB.query([[SELECT o.event_id,o.status FROM `feather_organization_outbox` o
                 JOIN `feather_organization_events` e ON e.event_id=o.event_id
-                WHERE e.organization_id IN (?,?)]],{id,parent.organizationId}) or {}
+                WHERE e.organization_id IN (?,?)]], id,parent.organizationId) or {}
             local published=0
             for _,row in ipairs(rows) do if row.status=='published' then published=published+1 end end
             if published==5 then break end

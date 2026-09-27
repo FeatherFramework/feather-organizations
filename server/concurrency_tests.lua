@@ -46,11 +46,10 @@ Organizations.RegisterDevCommand('OrganizationsConcurrencyTest', function(source
             end
             local replay = winner and OrganizationLifecycle.Change(requests[winner],owner)
             local current = OrganizationIdentity.Get({organizationId=id},owner)
-            local counts = MySQL.single.await([[SELECT
+            local counts = DB.one([[SELECT
                 (SELECT COUNT(*) FROM `feather_organization_events` WHERE `organization_id`=?) AS events,
                 (SELECT COUNT(*) FROM `feather_organization_lifecycle_receipts`
-                    WHERE `source_resource`=? AND `request_id` IN (?,?)) AS receipts]],
-                {id,owner,requests[1].requestId,requests[2].requestId})
+                    WHERE `source_resource`=? AND `request_id` IN (?,?)) AS receipts]], id,owner,requests[1].requestId,requests[2].requestId)
             local good = success==1 and stale==1 and replay and replay.ok and replay.value.replayed==true
                 and current.ok and current.value.revision==2 and current.value.status==requests[winner].status
                 and counts and tonumber(counts.events)==2 and tonumber(counts.receipts)==1
@@ -112,13 +111,12 @@ Organizations.RegisterDevCommand('OrganizationsIdentityLifecycleConcurrencyTest'
             end
             local replay=winner and operations[winner]()
             local current=OrganizationIdentity.Get({organizationId=id},owner)
-            local counts=MySQL.single.await([[SELECT
+            local counts=DB.one([[SELECT
                 (SELECT COUNT(*) FROM `feather_organization_events` WHERE `organization_id`=?) AS events,
                 (SELECT COUNT(*) FROM `feather_organization_identity_receipts`
                     WHERE `source_resource`=? AND `request_id`=?) AS edits,
                 (SELECT COUNT(*) FROM `feather_organization_lifecycle_receipts`
-                    WHERE `source_resource`=? AND `request_id`=?) AS lifecycle]],
-                {id,owner,edit.requestId,owner,change.requestId})
+                    WHERE `source_resource`=? AND `request_id`=?) AS lifecycle]], id,owner,edit.requestId,owner,change.requestId)
             local consistent=current.ok and (
                 (winner==1 and current.value.status=='pending' and current.value.legalName==edit.legalName
                     and current.value.displayName==edit.displayName)
@@ -190,22 +188,22 @@ Organizations.RegisterDevCommand('OrganizationsInterestConcurrencyTest',function
             assert(replay.replayed and replay.interestId==outcomes[winner].value.interestId,'Winner receipt did not replay')
             local current=Require(OrganizationIdentity.Get({organizationId=id},owner))
             assert(current.revision==2 and current.status=='pending','Organization state inconsistent')
-            local interests=MySQL.query.await('SELECT * FROM `feather_organization_interests` WHERE `organization_id`=?',{id}) or {}
+            local interests=DB.query('SELECT * FROM `feather_organization_interests` WHERE `organization_id`=?', id) or {}
             assert(#interests==1 and interests[1].interest_id==replay.interestId and interests[1].interest_type==requests[winner].interestType
                 and interests[1].holder_id==args[2]:lower() and interests[1].status=='active' and tonumber(interests[1].revision)==2,
                 'Interest state is not winner-only')
-            local events=MySQL.query.await('SELECT `event_id`,`request_id`,`revision` FROM `feather_organization_events` WHERE `organization_id`=?',{id}) or {}
+            local events=DB.query('SELECT `event_id`,`request_id`,`revision` FROM `feather_organization_events` WHERE `organization_id`=?', id) or {}
             assert(#events==2,'Expected creation and one grant audit event')
             local grantEvent
             for _,event in ipairs(events) do
                 if event.request_id==requests[winner].requestId then grantEvent=event end
             end
             assert(grantEvent and tonumber(grantEvent.revision)==2,'Winner audit missing')
-            local receipts=MySQL.query.await([[SELECT `request_id` FROM `feather_organization_interest_receipts`
-                WHERE `source_resource`=? AND `request_id` IN (?,?)]],{owner,requests[1].requestId,requests[2].requestId}) or {}
+            local receipts=DB.query([[SELECT `request_id` FROM `feather_organization_interest_receipts`
+                WHERE `source_resource`=? AND `request_id` IN (?,?)]], owner,requests[1].requestId,requests[2].requestId) or {}
             assert(#receipts==1 and receipts[1].request_id==requests[winner].requestId,'Loser receipt persisted')
-            local outbox=MySQL.query.await([[SELECT o.event_id,o.payload_json FROM `feather_organization_outbox` o
-                JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?]],{id}) or {}
+            local outbox=DB.query([[SELECT o.event_id,o.payload_json FROM `feather_organization_outbox` o
+                JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?]], id) or {}
             assert(#outbox==2,'Outbox count inconsistent')
             local payload
             for _,row in ipairs(outbox) do if row.event_id==grantEvent.event_id then payload=json.decode(row.payload_json) end end
@@ -272,16 +270,14 @@ Organizations.RegisterDevCommand('OrganizationsInterestLifecycleConcurrencyTest'
                 assert(interests[1].interestId==replay.interestId and interests[1].holderId==grant.holderId
                     and interests[1].status=='active' and interests[1].revision==2,'Winner interest inconsistent')
             end
-            local counts=MySQL.single.await([[SELECT
+            local counts=DB.one([[SELECT
                 (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id=?) AS events,
                 (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id=?) AS outbox,
                 (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS grants,
-                (SELECT COUNT(*) FROM `feather_organization_lifecycle_receipts` WHERE source_resource=? AND request_id=?) AS changes]],
-                {id,id,owner,grant.requestId,owner,dissolve.requestId})
+                (SELECT COUNT(*) FROM `feather_organization_lifecycle_receipts` WHERE source_resource=? AND request_id=?) AS changes]], id,id,owner,grant.requestId,owner,dissolve.requestId)
             assert(tonumber(counts.events)==2 and tonumber(counts.outbox)==2
                 and tonumber(counts.grants)==(winner==1 and 1 or 0) and tonumber(counts.changes)==(winner==2 and 1 or 0),'Mixed atomic counts invalid')
-            local audit=MySQL.single.await('SELECT `event_type`,`revision` FROM `feather_organization_events` WHERE source_resource=? AND request_id=?',
-                {owner,winner==1 and grant.requestId or dissolve.requestId})
+            local audit=DB.one('SELECT `event_type`,`revision` FROM `feather_organization_events` WHERE source_resource=? AND request_id=?', owner,winner==1 and grant.requestId or dissolve.requestId)
             assert(audit and audit.event_type==(winner==1 and 'organization.interest_granted' or 'organization.status_changed')
                 and tonumber(audit.revision)==2,'Winner audit inconsistent')
             print(('[%s] PASS id=%s committed=1 stale=1 winner=%s revision=2 state=%s interests=%d events=2 outbox=2 receipts=1 winnerReplayed=true consistent=true'):format(
@@ -330,12 +326,11 @@ Organizations.RegisterDevCommand('OrganizationsHolderGrantOrderingTest',function
         assert(targetState.status=='pending' and targetState.revision==2 and holderState.status=='suspended' and holderState.revision==3
             and #page.items==1 and page.items[1].interestId==granted.interestId
             and page.items[1].holderId==holder.organizationId and page.items[1].revision==2,'Grant-first state inconsistent')
-        local counts=MySQL.single.await([[SELECT
+        local counts=DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id IN (?,?)) AS events,
             (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id IN (?,?)) AS outbox,
             (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS grants,
-            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS rejected]],
-            {target.organizationId,holder.organizationId,target.organizationId,holder.organizationId,owner,grant.requestId,owner,fresh.requestId})
+            (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS rejected]], target.organizationId,holder.organizationId,target.organizationId,holder.organizationId,owner,grant.requestId,owner,fresh.requestId)
         assert(tonumber(counts.events)==5 and tonumber(counts.outbox)==5 and tonumber(counts.grants)==1 and tonumber(counts.rejected)==0,'Grant-first record counts inconsistent')
         print(('[OrganizationsHolderGrantOrderingTest] PASS target=%s holder=%s ordering=grant_then_suspend holderRevision=3 targetRevision=2 interests=1 events=5 outbox=5 originalReceipt=true freshGrantBlocked=true noImplicitRevocation=true firstReplayed=%s'):format(
             target.organizationId,holder.organizationId,tostring(granted.replayed)))
@@ -407,12 +402,11 @@ Organizations.RegisterDevCommand('OrganizationsHolderGrantConcurrencyTest',funct
                 assert(interests[1].interestId==grantReplay.value.interestId and interests[1].holderId==holder.organizationId
                     and interests[1].status=='active','Previously committed interest changed implicitly')
             end
-            local counts=MySQL.single.await([[SELECT
+            local counts=DB.one([[SELECT
                 (SELECT COUNT(*) FROM `feather_organization_events` WHERE organization_id IN (?,?)) AS events,
                 (SELECT COUNT(*) FROM `feather_organization_outbox` o JOIN `feather_organization_events` e ON e.event_id=o.event_id WHERE e.organization_id IN (?,?)) AS outbox,
                 (SELECT COUNT(*) FROM `feather_organization_interest_receipts` WHERE source_resource=? AND request_id=?) AS grants,
-                (SELECT COUNT(*) FROM `feather_organization_lifecycle_receipts` WHERE source_resource=? AND request_id=?) AS suspensions]],
-                {target.organizationId,holder.organizationId,target.organizationId,holder.organizationId,owner,grant.requestId,owner,suspend.requestId})
+                (SELECT COUNT(*) FROM `feather_organization_lifecycle_receipts` WHERE source_resource=? AND request_id=?) AS suspensions]], target.organizationId,holder.organizationId,target.organizationId,holder.organizationId,owner,grant.requestId,owner,suspend.requestId)
             local expected=granted and 5 or 4
             assert(tonumber(counts.events)==expected and tonumber(counts.outbox)==expected
                 and tonumber(counts.grants)==(granted and 1 or 0) and tonumber(counts.suspensions)==1,'Race atomic counts inconsistent')

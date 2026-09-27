@@ -94,12 +94,11 @@ Organizations.RegisterDevCommand('OrganizationsHierarchyConcurrencyTest',functio
                 and states[winner].value.revision==2 and states[winner].value.parentOrganizationId==ids[3-winner]
                 and states[3-winner].value.revision==1 and states[3-winner].value.parentOrganizationId==nil
                 and first.value.status=='pending' and second.value.status=='pending'
-            local counts=MySQL.single.await([[SELECT
+            local counts=DB.one([[SELECT
                 (SELECT COUNT(*) FROM `feather_organization_parents` WHERE `organization_id` IN (?,?)) AS links,
                 (SELECT COUNT(*) FROM `feather_organization_events` WHERE `organization_id` IN (?,?)) AS events,
                 (SELECT COUNT(*) FROM `feather_organization_hierarchy_receipts`
-                    WHERE `source_resource`=? AND `request_id` IN (?,?)) AS receipts]],
-                {ids[1],ids[2],ids[1],ids[2],owner,requests[1].requestId,requests[2].requestId})
+                    WHERE `source_resource`=? AND `request_id` IN (?,?)) AS receipts]], ids[1],ids[2],ids[1],ids[2],owner,requests[1].requestId,requests[2].requestId)
             local good=committed==1 and cycles==1 and consistent and replay and replay.ok and replay.value.replayed==true
                 and counts and tonumber(counts.links)==1 and tonumber(counts.events)==3 and tonumber(counts.receipts)==1
             print(('[OrganizationsHierarchyConcurrencyTest] %s committed=%d cycleRejected=%d winner=%s consistent=%s links=%s events=%s receipts=%s winnerReplayed=%s'):format(
@@ -148,11 +147,10 @@ Organizations.RegisterDevCommand('OrganizationsHierarchyLiveTest',function(sourc
         local readA=OrganizationIdentity.Get({organizationId=ids[1]},owner)
         local readB=OrganizationIdentity.Get({organizationId=ids[2]},owner)
         local readC=OrganizationIdentity.Get({organizationId=ids[3]},owner)
-        local counts=MySQL.single.await([[SELECT
+        local counts=DB.one([[SELECT
             (SELECT COUNT(*) FROM `feather_organization_events` WHERE `organization_id` IN (?,?,?)) AS events,
             (SELECT COUNT(*) FROM `feather_organization_hierarchy_receipts`
-                WHERE `source_resource`=? AND `request_id` IN (?,?)) AS rejected_receipts]],
-            {ids[1],ids[2],ids[3],owner,base .. ':cycle',base .. ':stale'})
+                WHERE `source_resource`=? AND `request_id` IN (?,?)) AS rejected_receipts]], ids[1],ids[2],ids[3],owner,base .. ':cycle',base .. ':stale')
         local good=not cycle.ok and cycle.code=='hierarchy_cycle' and not stale.ok and stale.code=='revision_conflict'
             and not mismatch.ok and mismatch.code=='idempotency_conflict' and removed.ok and removed.value.revision==3
             and replay.ok and replay.value.replayed==true and replay.value.parentOrganizationId==ids[2]

@@ -3,7 +3,7 @@ local Ok,Err=Organizations.Ok,Organizations.Err
 local maximumLinks,maximumDepth=4096,32
 local function Editable(status) return status=='pending' or status=='active' or status=='suspended' end
 function OrganizationHierarchy.CheckStartup()
-    local guard=MySQL.scalar.await('SELECT `id` FROM `feather_organization_hierarchy_guard` WHERE `id`=1')
+    local guard=DB.value('SELECT `id` FROM `feather_organization_hierarchy_guard` WHERE `id`=1')
     if tonumber(guard)~=1 then return Err('invalid_persistence','Hierarchy guard is missing.') end
     return Ok(true)
 end
@@ -63,22 +63,21 @@ function OrganizationHierarchy.Change(request,resource,operation)
     local current=Organizations.CheckRead(resource)
     if not current.ok then return current end
     local result
-    local called,committed=pcall(MySQL.startTransaction,function(query)
+    local called,committed=pcall(DB.transaction, function(tx)
         local executed,outcome=xpcall(function()
             -- All graph writers take this row first; opposing links cannot both
             -- validate against an old snapshot and create a concurrent cycle.
-            local guard=query('SELECT `id` FROM `feather_organization_hierarchy_guard` WHERE `id`=1 FOR UPDATE') or {}
+            local guard=tx.query('SELECT `id` FROM `feather_organization_hierarchy_guard` WHERE `id`=1 FOR UPDATE') or {}
             if not guard[1] then return Err('invalid_persistence','Hierarchy guard is missing.') end
-            query([[INSERT IGNORE INTO `feather_organization_hierarchy_receipts`
-                (`source_resource`,`request_id`,`request_fingerprint`) VALUES (?,?,?)]],{resource,request.requestId,valid.value})
-            local receipts=query([[SELECT `request_fingerprint`,`result_json` FROM `feather_organization_hierarchy_receipts`
-                WHERE `source_resource`=? AND `request_id`=? FOR UPDATE]],{resource,request.requestId}) or {}
+            tx.exec([[INSERT IGNORE INTO `feather_organization_hierarchy_receipts`
+                (`source_resource`,`request_id`,`request_fingerprint`) VALUES (?,?,?)]], resource,request.requestId,valid.value)
+            local receipts=tx.query([[SELECT `request_fingerprint`,`result_json` FROM `feather_organization_hierarchy_receipts`
+                WHERE `source_resource`=? AND `request_id`=? FOR UPDATE]], resource,request.requestId) or {}
             local receipt=receipts[1]
             if not receipt then return Err('internal_error','Could not reserve hierarchy receipt.') end
             if receipt.request_fingerprint~=valid.value then return Err('idempotency_conflict','Request ID belongs to another hierarchy payload.') end
-            local rows=query([[SELECT `organization_id`,`status`,`revision`,`created_by_resource` FROM `feather_organizations`
-                WHERE `organization_id`=? OR `organization_id`=? ORDER BY `organization_id` FOR UPDATE]],
-                {request.organizationId,parent or request.organizationId}) or {}
+            local rows=tx.query([[SELECT `organization_id`,`status`,`revision`,`created_by_resource` FROM `feather_organizations`
+                WHERE `organization_id`=? OR `organization_id`=? ORDER BY `organization_id` FOR UPDATE]], request.organizationId,parent or request.organizationId) or {}
             local child,parentRow
             for _,row in ipairs(rows) do
                 if row.organization_id==request.organizationId then child=row end
@@ -101,14 +100,14 @@ function OrganizationHierarchy.Change(request,resource,operation)
             if parentRow and parentRow.created_by_resource~=resource and Config.Access.privilegedMutators[resource]~=true then
                 return Err('authorization_denied','Caller does not own the proposed parent.')
             end
-            local events=query([[SELECT `event_id` FROM `feather_organization_events`
-                WHERE `source_resource`=? AND `request_id`=?]],{resource,request.requestId}) or {}
+            local events=tx.query([[SELECT `event_id` FROM `feather_organization_events`
+                WHERE `source_resource`=? AND `request_id`=?]], resource,request.requestId) or {}
             if #events>0 then return Err('idempotency_conflict','Request ID belongs to another organization operation.') end
             if tonumber(child.revision)~=request.expectedRevision then return Err('revision_conflict','Child revision changed.') end
             if not Editable(child.status) or (parentRow and not Editable(parentRow.status)) then
                 return Err('organization_inactive','Dissolving/dissolved organizations cannot receive new hierarchy changes.')
             end
-            local links=query('SELECT `organization_id`,`parent_organization_id` FROM `feather_organization_parents` LIMIT 4097') or {}
+            local links=tx.query('SELECT `organization_id`,`parent_organization_id` FROM `feather_organization_parents` LIMIT 4097') or {}
             if #links>maximumLinks then return Err('hierarchy_limit','Hierarchy exceeds supported link limit.') end
             local parents={}
             for _,link in ipairs(links) do parents[link.organization_id]=link.parent_organization_id end
@@ -118,18 +117,17 @@ function OrganizationHierarchy.Change(request,resource,operation)
             local graph=OrganizationHierarchy.ValidateGraph(parents)
             if not graph.ok then return graph end
             if parent then
-                query([[INSERT INTO `feather_organization_parents` (`organization_id`,`parent_organization_id`) VALUES (?,?)
-                    ON DUPLICATE KEY UPDATE `parent_organization_id`=VALUES(`parent_organization_id`)]],{request.organizationId,parent})
-            else query('DELETE FROM `feather_organization_parents` WHERE `organization_id`=?',{request.organizationId}) end
-            query('UPDATE `feather_organizations` SET `revision`=`revision`+1 WHERE `organization_id`=? AND `revision`=?',
-                {request.organizationId,request.expectedRevision})
-            OrganizationEvents.Record(query,request.organizationId,'organization.parent_changed',resource,
+                tx.exec([[INSERT INTO `feather_organization_parents` (`organization_id`,`parent_organization_id`) VALUES (?,?)
+                    ON DUPLICATE KEY UPDATE `parent_organization_id`=VALUES(`parent_organization_id`)]], request.organizationId,parent)
+            else tx.exec('DELETE FROM `feather_organization_parents` WHERE `organization_id`=?', request.organizationId) end
+            tx.exec('UPDATE `feather_organizations` SET `revision`=`revision`+1 WHERE `organization_id`=? AND `revision`=?', request.organizationId,request.expectedRevision)
+            OrganizationEvents.Record(tx,request.organizationId,'organization.parent_changed',resource,
                 request.requestId,request.reasonCode,request.expectedRevision+1,
                 {parentOrganizationId=parent,previousParentOrganizationId=previous})
             local value={organizationId=request.organizationId,parentOrganizationId=parent,
                 previousParentOrganizationId=previous,revision=request.expectedRevision+1,replayed=false}
-            query([[UPDATE `feather_organization_hierarchy_receipts` SET `result_json`=?
-                WHERE `source_resource`=? AND `request_id`=?]],{json.encode(value),resource,request.requestId})
+            tx.exec([[UPDATE `feather_organization_hierarchy_receipts` SET `result_json`=?
+                WHERE `source_resource`=? AND `request_id`=?]], json.encode(value),resource,request.requestId)
             return Ok(value)
         end,debug.traceback)
         if not executed then
