@@ -16,6 +16,7 @@ Config = {
         trustedAuditors = { ['feather-organizations'] = true, ['feather-admin'] = true, ['feather-shops'] = true },
         privilegedAuditors = { ['feather-admin'] = true },
         trustedReaders = {
+            ['feather-access'] = true, -- Current organization eligibility; no mutation rights.
             ['feather-jobs'] = true, -- Validate canonical organization employers; no mutation rights.
             ['feather-organizations'] = true,
             ['feather-admin'] = true,
