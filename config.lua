@@ -10,8 +10,10 @@ Config = {
         dissolveAction = 'organizations.organization.dissolve',
         hierarchyAction = 'organizations.relationship.manage', interestAction = 'organizations.interest.manage' },
     Access = {
-        trustedCreators = { ['feather-organizations'] = true, ['feather-admin'] = true, ['feather-shops'] = true },
-        trustedMutators = { ['feather-organizations'] = true, ['feather-admin'] = true, ['feather-shops'] = true },
+        trustedCreators = { ['feather-organizations'] = true, ['feather-admin'] = true, ['feather-shops'] = true,
+            ['bcc-society'] = true, ['bcc-banks'] = true },
+        trustedMutators = { ['feather-organizations'] = true, ['feather-admin'] = true, ['feather-shops'] = true,
+            ['bcc-society'] = true, ['bcc-banks'] = true },
         privilegedMutators = { ['feather-admin'] = true },
         trustedAuditors = { ['feather-organizations'] = true, ['feather-admin'] = true, ['feather-shops'] = true },
         privilegedAuditors = { ['feather-admin'] = true },
@@ -21,7 +23,13 @@ Config = {
             ['feather-organizations'] = true,
             ['feather-admin'] = true,
             ['feather-economy'] = true,
-            ['feather-shops'] = true
+            ['feather-shops'] = true,
+            ['feather-assets'] = true,
+            ['feather-property'] = true,
+            ['feather-licenses'] = true,
+            ['feather-justice'] = true, -- verifies organization case parties
+            ['bcc-society'] = true,
+            ['bcc-banks'] = true
         }
     },
     -- Stable keys are immutable classification, not permissions or gameplay.
