@@ -1,14 +1,19 @@
 # Feather Organizations
 
+Alpha release 0.2.1 (2026-10-20): native Jobs and Access reader integration,
+development fixtures and real employment/grant lifecycle acceptance. Config.DevMode
+stays true at owner direction for early alpha/pre-alpha releases. No schema change.
+
 Authoritative organization identity domain, independent of Society, Jobs, money,
 permissions, or shop presentation. Native Feather; no legacy compatibility layer.
 
-Shipped defaults use `Config.DevMode=false` with service-policy authorization
-enabled. Acceptance fixtures receive no trust and development commands are not
-registered. The permanent server-console `OrganizationsReleaseContractSmokeTest`
+This alpha ships `Config.DevMode=true` with service-policy authorization enabled.
+Development commands and exact fixture trust are enabled. The permanent
+server-console `OrganizationsReleaseContractSmokeTest`
 is read-only and checks readiness, policy mode, fixture exclusion, publisher state,
-capabilities, and the canonical Valentine business. Enable DevMode only on an
-isolated development server; disable it and restart before packaging.
+capabilities, and the canonical Valentine business. Its production-exclusion
+checks intentionally fail in this alpha posture. Keep DevMode true for the
+current alpha PR/release; historical production acceptance used another config.
 
 ## First slice
 
@@ -61,7 +66,7 @@ Then use `OrganizationsCreationLiveTest org-creation-001` with DevMode enabled.
 It creates one real pending entity using fixed key `org_creation_test`, verifies
 same-ID replay, payload conflict, global key conflict, and one entity/audit row.
 Restart and repeat the exact original request ID; never use a fresh key/ID to
-recover this test. Disable DevMode and configure authorization before deployment.
+recover this test. Keep authorization enabled; DevMode remains true for alpha.
 
 ## Revision-checked lifecycle
 
