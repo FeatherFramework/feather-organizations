@@ -2,7 +2,7 @@ Config = {
     Contract = 1,
     RequiredCoreContract = 1,
     ReadinessTimeoutMs = 30000,
-    DevMode = false,
+    DevMode = true,
     Outbox = { pollIntervalMs = 1000, retryDelaySeconds = 5, batchSize = 20 },
     Authorization = { enabled = true, createAction = 'organizations.organization.create',
         updateAction = 'organizations.organization.update',
@@ -16,6 +16,7 @@ Config = {
         trustedAuditors = { ['feather-organizations'] = true, ['feather-admin'] = true, ['feather-shops'] = true },
         privilegedAuditors = { ['feather-admin'] = true },
         trustedReaders = {
+            ['feather-jobs'] = true, -- Validate canonical organization employers; no mutation rights.
             ['feather-organizations'] = true,
             ['feather-admin'] = true,
             ['feather-economy'] = true,
@@ -32,6 +33,9 @@ Config = {
 
 -- Optional acceptance fixture only. Never start it or grant it trust in production.
 if Config.DevMode then
+    Config.Access.trustedReaders['feather-jobs-tests'] = true
+    Config.Access.trustedCreators['feather-jobs-tests'] = true
+    Config.Access.trustedMutators['feather-jobs-tests'] = true
     Config.Access.trustedReaders['feather-organizations-tests'] = true
     Config.Access.trustedCreators['feather-organizations-tests'] = true
     Config.Access.trustedMutators['feather-organizations-tests'] = true
